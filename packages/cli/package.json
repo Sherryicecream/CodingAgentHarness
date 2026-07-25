@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@harness/core": "*",
-    "@harness/server": "*"
+    "@harness/server": "*",
+    "open": "^10.0.0"
   }
 }

@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: harness
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: cd packages/server && npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DEEPSEEK_API_KEY
+        sync: false
