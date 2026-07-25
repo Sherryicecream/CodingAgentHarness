@@ -122,22 +122,21 @@ Agent = LLM + Harness。LLM 只负责"决定下一步做什么"，而 harness �
 - **可配置项**：工具白名单/黑名单、最大轮次、测试命令、文件忽略规则、危险命令自定义列表
 - **加载时机**：Agent 启动时加载，变更需重启
 
-### 3.7 CLI 入口
+### 3.7 Web 应用 ★ 主入口
 
-- **命令**：`harness`（启动交互式会话）、`harness web`（启动 Web 面板）、`harness config`（凭据管理）
-- **交互模式**：REPL 风格，用户输入任务，agent 实时输出执行过程
+- **线上部署**：部署到 Vercel（免费额度），用户通过浏览器打开即用，零安装
+- **对话界面**：类似 ChatGPT 的对话式编程体验，输入任务 → agent 实时执行
+- **实时监控**：SSE 推送每步循环状态——LLM 调用、工具执行、护栏检查、反馈运行
+- **历史回顾**：会话列表，可展开查看完整对话历史和每一轮反馈修正记录
+- **配置管理**：Web 界面配置 API Key（隐藏输入）、项目规则、工具白名单
+- **HITL 交互**：危险命令拦截时，在 Web 界面弹出确认框，等待用户批准/拒绝
+- **技术**：Express + React (Vite) 全栈应用，`@harness/server` 包
 
-### 3.8 Web 面板
+### 3.8 CLI 工具（可选辅助）
 
-**本地模式**（`harness web`）：
-- **实时监控**：显示当前 agent 状态、对话流、每步工具调用
-- **历史回顾**：会话列表，可展开查看完整的对话历史和反馈修正记录
-- **技术**：本地 HTTP 服务 + React 前端，仅 localhost 访问
-
-**线上部署**（满足通用要求 §5.9）：
-- 将 Web 面板部署到 Vercel（免费额度），提供公网可访问 URL
-- 线上版为只读历史回顾 + 配置管理页面，不依赖本地 agent 实例
-- 本地 agent 运行结束后，可选将会话数据推送到线上版
+- **命令**：`harness`（启动本地 Agent Server + 打开浏览器）、`harness config`（命令行凭据管理）
+- **定位**：为偏好终端的用户提供本地运行选项，功能与 Web 版一致
+- **技术**：轻量封装，复用 `@harness/core`
 
 ---
 
@@ -159,8 +158,9 @@ Agent = LLM + Harness。LLM 只负责"决定下一步做什么"，而 harness �
 | 首次运行无引导 | 引导式隐藏输入 → 存储到 Windows Credential Manager |
 
 ### 可用性
-- 单命令安装：`npm install -g @harness/cli`
-- 首次运行自动引导配置
+- 零安装：打开浏览器即可使用（线上版）
+- 本地备选：`npm install -g @harness/cli` + `harness`
+- 首次使用自动引导配置 API Key
 - 错误信息清晰，指明是哪个环节失败
 
 ### 可观测性
@@ -172,22 +172,31 @@ Agent = LLM + Harness。LLM 只负责"决定下一步做什么"，而 harness �
 
 ## 5. 系统架构
 
+**Web 优先架构**：Web 应用是用户的主要入口，部署在线上（Vercel），浏览器打开即用。Agent Server 内嵌在 Web 服务中，直接运行 harness core。CLI 降级为可选辅助工具。
+
 ```
-┌─────────────────────────────────────────────────┐
-│                   @harness/cli                    │
-│           (CLI 入口, 交互式对话, 启动 agent)        │
-│             依赖: @harness/core                   │
-└─────────────────────┬───────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│              浏览器 (用户入口)                      │
+│         https://harness.vercel.app                │
+└─────────────────────┬────────────────────────────┘
+                      │ HTTP + SSE
+┌─────────────────────┴────────────────────────────┐
+│                 @harness/server                    │
+│          (Express + React 全栈应用)                 │
+│                                                    │
+│  ┌──────────────┐  ┌───────────────────────────┐ │
+│  │  React UI    │  │  Agent Server (内嵌)       │ │
+│  │  ├ 对话界面   │  │  ┌─────────────────────┐  │ │
+│  │  ├ 工具调用   │  │  │  @harness/core      │  │ │
+│  │  ├ 历史回顾   │  │  │  (完整 harness 内核)  │  │ │
+│  │  └ 配置管理   │  │  └─────────────────────┘  │ │
+│  └──────────────┘  └───────────────────────────┘ │
+└──────────────────────────────────────────────────┘
                       │
-┌─────────────────────┴───────────────────────────┐
-│                   @harness/web                    │
-│    (本地 Web 服务, 实时监控面板 + 历史会话回顾)     │
-│             依赖: @harness/core                   │
-└─────────────────────┬───────────────────────────┘
-                      │
-┌─────────────────────┴───────────────────────────┐
-│                  @harness/core                    │
-│                                                   │
+┌─────────────────────┴────────────────────────────┐
+│                  @harness/core                     │
+│          (纯逻辑库，无 UI 依赖，可单测)              │
+│                                                    │
 │  ┌─────────┐ ┌──────────┐ ┌───────────────────┐ │
 │  │AgentLoop│ │ToolRegistry│ │Guardrail         │ │
 │  │(主循环)  │ │(工具分发)  │ │(危险动作拦截)     │ │
@@ -204,40 +213,21 @@ Agent = LLM + Harness。LLM 只负责"决定下一步做什么"，而 harness �
 │  │MemoryStore│ │ConfigLoader  │ │LLMAdapter    │ │
 │  └──────────┘ └──────────────┘ └──────────────┘ │
 └─────────────────────────────────────────────────┘
+                      │
+┌─────────────────────┴────────────────────────────┐
+│               @harness/cli (可选)                  │
+│     (本地终端工具，连接 Agent Server 或独立运行)     │
+│              依赖: @harness/core                   │
+└──────────────────────────────────────────────────┘
 ```
 
-### 核心接口
-
-```typescript
-// LLM 抽象层
-interface LLMAdapter {
-  sendMessage(context: AgentContext): Promise<AgentResponse>;
-}
-
-// 工具
-interface Tool {
-  definition: ToolDefinition;
-  execute(params: Record<string, unknown>): Promise<ToolResult>;
-  riskLevel: "safe" | "moderate" | "dangerous";
-}
-
-// 反馈闭环
-interface FeedbackLoop {
-  run(workingDir: string): Promise<FeedbackResult>;
-}
-
-// Agent 主循环
-interface AgentLoop {
-  run(task: string): Promise<RunResult>;
-}
-```
-
-### 数据流
+### 交互流程
 
 ```
-用户输入 → 构建上下文 → 护栏预检 → LLM 调用 → 解析动作
-    → 工具执行 → 反馈闭环（测试→解析→分类→回灌）
-    → LLM 再次调用（携带反馈）→ ... → 测试通过 → 停机
+用户打开浏览器 → 输入任务 → Server 收到请求
+  → 启动 AgentLoop（上下文 → LLM → 工具 → 反馈 → 循环）
+  → 每步通过 SSE 推送给前端实时展示
+  → 任务完成 → 会话存入历史 → 用户可查看/回顾
 ```
 
 ---
@@ -312,14 +302,17 @@ interface MemoryEntry {
 5. 管理命令：`harness config status`（不回显明文）、`harness config update`、`harness config clear`
 
 ### 分发
+
 | 项目 | 决策 |
 |------|------|
-| 形态 | npm 包 |
-| 包结构 | `@harness/core` + `@harness/cli` + `@harness/web` |
-| 安装 | `npm install -g @harness/cli` |
-| 运行 | `harness`（CLI）；`harness web`（Web 面板） |
+| **主形态** | 线上部署（Vercel），浏览器打开即用 |
+| **辅助形态** | npm 包 `@harness/cli`（本地运行） |
+| 包结构 | `@harness/core` + `@harness/server` + `@harness/cli` |
+| 线上 URL | `https://harness.vercel.app`（Vercel 免费额度） |
+| 本地安装 | `npm install -g @harness/cli` |
+| 本地运行 | `harness`（启动本地服务器 + 打开浏览器） |
 | 平台 | Node.js 18+，Windows / macOS / Linux |
-| 已知限制 | Web 面板仅 localhost；Windows Credential Manager 需 Windows 平台 |
+| 已知限制 | 线上版需配置 Vercel 环境变量存储 API Key；本地凭据使用系统密钥链 |
 
 ---
 
@@ -358,12 +351,13 @@ interface MemoryEntry {
 | 运行时 | Node.js 18+ | LTS 版本，稳定 |
 | LLM 供应商 | DeepSeek | API 兼容 OpenAI 格式，性价比高，国内可访问 |
 | LLM SDK | `openai` npm 包 | 兼容 DeepSeek API，生态成熟 |
-| CLI 框架 | Ink (React for CLI) | React 语法写 CLI，组件化 |
-| Web 前端 | React + Vite | 轻量，快速开发 |
+| Web 框架 | Express + React (Vite) | Express 轻量稳定，React 生态成熟 |
+| CLI 框架 | 轻量封装 | 复用 core，不引入重量级 CLI 框架 |
 | 数据库 | better-sqlite3 | 零配置本地 SQLite，同步 API |
 | 凭据存储 | keytar (跨平台密钥链) | 支持 Windows/macOS/Linux |
 | 测试框架 | Vitest | 快，TypeScript 原生支持 |
 | 打包 | tsup | 轻量 TypeScript 打包 |
+| 部署 | Vercel (免费) | 零配置部署，支持 Node.js，有免费额度 |
 | CI | GitHub Actions | 仓库在 GitHub，使用 `.github/workflows/ci.yml` |
 | monorepo | npm workspaces | 原生支持，无需额外工具 |
 
@@ -378,8 +372,8 @@ interface MemoryEntry {
 | 护栏 | 传入危险命令 → 被拦截，等待用户确认 |
 | 工具系统 | 所有工具可注册、可执行、参数校验正确 |
 | 记忆 | 跨会话可读写记忆，按项目隔离 |
-| CLI | `harness` 启动交互式会话，正常工作 |
-| Web 面板 | `harness web` 启动，浏览器可访问，显示实时状态和历史 |
+| CLI | `harness` 启动本地服务，浏览器可访问 |
+| Web 线上部署 | Vercel 部署，公网 URL 可访问，功能完整 |
 | 凭据 | 首次运行引导配置，key 不入源码、不入 Git、不入日志 |
 | 分发 | `npm install -g` 后可运行 |
 | Mock 测试 | 所有核心机制有 mock LLM 驱动的确定性单元测试 |
@@ -395,6 +389,6 @@ interface MemoryEntry {
 | 测试输出格式多样（Jest/pytest/go test） | ResultParser 采用插件式，先支持 Jest |
 | 反馈闭环可能多轮修正失败 | 最多 5 轮，超出后暂停请求人工介入 |
 | 记忆系统复杂度可能超出时间 | 先做关键词检索，向量检索作为可选增强 |
-| Web 面板实时更新实现复杂度 | 使用 SSE (Server-Sent Events) 推送 agent 状态 |
+| SSE 实时推送在 Vercel Serverless 下受限 | Vercel 支持 Streaming，或降级为轮询 |
 | Windows Credential Manager 兼容性 | 使用 keytar 库跨平台抽象，非 Windows 平台 fallback 到加密文件 |
-| 线上部署 URL 要求 | 通用要求 §5.9 要求 WebUI 线上 URL，但本项目 Web 面板为本地服务。若必须满足，可部署一个只读历史回顾页面到 Vercel/Render（免费额度），通过 WebSocket/SSE 连接本地 agent 实例 |
+| 线上版 API Key 存储安全 | Vercel 环境变量加密存储，传输层 HTTPS，不落盘 |
