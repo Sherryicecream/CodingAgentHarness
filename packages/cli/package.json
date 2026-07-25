@@ -1,0 +1,17 @@
+{
+  "name": "@harness/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "harness": "./dist/cli.js"
+  },
+  "scripts": {
+    "test": "echo 'no tests yet'",
+    "build": "tsup src/cli.ts --format esm"
+  },
+  "dependencies": {
+    "@harness/core": "*",
+    "@harness/server": "*"
+  }
+}
