@@ -124,7 +124,7 @@ Agent = LLM + Harness。LLM 只负责"决定下一步做什么"，而 harness �
 
 ### 3.7 Web 应用 ★ 主入口
 
-- **线上部署**：部署到 Vercel（免费额度），用户通过浏览器打开即用，零安装
+- **线上部署**：部署到 Render（免费额度 750h/月），用户通过浏览器打开即用，零安装
 - **对话界面**：类似 ChatGPT 的对话式编程体验，输入任务 → agent 实时执行
 - **实时监控**：SSE 推送每步循环状态——LLM 调用、工具执行、护栏检查、反馈运行
 - **历史回顾**：会话列表，可展开查看完整对话历史和每一轮反馈修正记录
@@ -172,12 +172,12 @@ Agent = LLM + Harness。LLM 只负责"决定下一步做什么"，而 harness �
 
 ## 5. 系统架构
 
-**Web 优先架构**：Web 应用是用户的主要入口，部署在线上（Vercel），浏览器打开即用。Agent Server 内嵌在 Web 服务中，直接运行 harness core。CLI 降级为可选辅助工具。
+**Web 优先架构**：Web 应用是用户的主要入口，部署在 Render（免费额度），浏览器打开即用。Agent Server 内嵌在 Web 服务中，直接运行 harness core。CLI 降级为可选辅助工具。
 
 ```
 ┌──────────────────────────────────────────────────┐
 │              浏览器 (用户入口)                      │
-│         https://harness.vercel.app                │
+│         https://harness.onrender.com              │
 └─────────────────────┬────────────────────────────┘
                       │ HTTP + SSE
 ┌─────────────────────┴────────────────────────────┐
@@ -305,14 +305,14 @@ interface MemoryEntry {
 
 | 项目 | 决策 |
 |------|------|
-| **主形态** | 线上部署（Vercel），浏览器打开即用 |
+| **主形态** | 线上部署（Render），浏览器打开即用 |
 | **辅助形态** | npm 包 `@harness/cli`（本地运行） |
 | 包结构 | `@harness/core` + `@harness/server` + `@harness/cli` |
-| 线上 URL | `https://harness.vercel.app`（Vercel 免费额度） |
+| 线上 URL | `https://harness.onrender.com`（Render 免费额度 750h/月） |
 | 本地安装 | `npm install -g @harness/cli` |
 | 本地运行 | `harness`（启动本地服务器 + 打开浏览器） |
 | 平台 | Node.js 18+，Windows / macOS / Linux |
-| 已知限制 | 线上版需配置 Vercel 环境变量存储 API Key；本地凭据使用系统密钥链 |
+| 已知限制 | Render 免费版 15 分钟无请求休眠，唤醒需 30-50 秒；本地凭据使用系统密钥链 |
 
 ---
 
@@ -357,7 +357,7 @@ interface MemoryEntry {
 | 凭据存储 | keytar (跨平台密钥链) | 支持 Windows/macOS/Linux |
 | 测试框架 | Vitest | 快，TypeScript 原生支持 |
 | 打包 | tsup | 轻量 TypeScript 打包 |
-| 部署 | Vercel (免费) | 零配置部署，支持 Node.js，有免费额度 |
+| 部署 | Render (免费) | 750h/月，支持长驻进程，无硬超时，兼容 agent 长循环 |
 | CI | GitHub Actions | 仓库在 GitHub，使用 `.github/workflows/ci.yml` |
 | monorepo | npm workspaces | 原生支持，无需额外工具 |
 
@@ -389,6 +389,7 @@ interface MemoryEntry {
 | 测试输出格式多样（Jest/pytest/go test） | ResultParser 采用插件式，先支持 Jest |
 | 反馈闭环可能多轮修正失败 | 最多 5 轮，超出后暂停请求人工介入 |
 | 记忆系统复杂度可能超出时间 | 先做关键词检索，向量检索作为可选增强 |
-| SSE 实时推送在 Vercel Serverless 下受限 | Vercel 支持 Streaming，或降级为轮询 |
+| SSE 实时推送在 Render 下可用 | Render 支持长连接（Web Service），非 Serverless，没问题 |
+| Render 免费版 15 分钟休眠 | 休眠后自动唤醒（30-50s），接受此限制；或用 cron job 定时唤醒 |
 | Windows Credential Manager 兼容性 | 使用 keytar 库跨平台抽象，非 Windows 平台 fallback 到加密文件 |
 | 线上版 API Key 存储安全 | Vercel 环境变量加密存储，传输层 HTTPS，不落盘 |
