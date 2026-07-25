@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+vendor/
+
+# Environment & credentials
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+service-account.json
+
+# Build output
+dist/
+build/
+target/
+out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Superpowers specs (will be committed separately)
+docs/superpowers/specs/
