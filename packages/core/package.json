@@ -18,7 +18,14 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
+    "@types/sql.js": "^1.4.11",
+    "@types/uuid": "^10.0.0",
     "nock": "^14.0.16",
     "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "sql.js": "^1.14.1",
+    "uuid": "^14.0.1",
+    "yaml": "^2.9.0"
   }
 }
