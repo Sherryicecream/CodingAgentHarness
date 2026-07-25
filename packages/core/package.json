@@ -17,6 +17,7 @@
     }
   },
   "devDependencies": {
+    "nock": "^14.0.16",
     "vitest": "^4.1.10"
   }
 }
