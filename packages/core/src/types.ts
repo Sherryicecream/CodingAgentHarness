@@ -95,6 +95,7 @@ export interface MemoryEntry {
   type: "convention" | "decision" | "knowledge" | "rule";
   content: string;
   source: string;
+  projectPath: string;
   createdAt: Date;
   lastAccessedAt: Date;
 }
