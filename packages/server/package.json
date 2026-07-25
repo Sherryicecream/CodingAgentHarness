@@ -1,0 +1,14 @@
+{
+  "name": "@harness/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "echo 'no tests yet'",
+    "build": "tsup src/server.ts --format esm",
+    "dev": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "@harness/core": "*"
+  }
+}
