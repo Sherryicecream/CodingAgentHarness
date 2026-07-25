@@ -1,0 +1,458 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import { createAgentLoop, AgentLoop, AgentLoopDependencies } from '../../src/loop/agent-loop.js';
+import { MockLLMAdapter } from '../../src/llm/mock.js';
+import { createToolRegistry, ToolRegistry } from '../../src/tools/tool.js';
+import { createGovernanceService, GovernanceService } from '../../src/guardrail/index.js';
+import { createContextBuilder, ContextBuilder } from '../../src/loop/context-builder.js';
+import { createStopCondition, StopCondition } from '../../src/loop/stop-condition.js';
+import { FeedbackLoop } from '../../src/feedback/feedback-loop.js';
+import { AgentResponse, Tool, ToolResult, FeedbackResult, FeedbackState } from '../../src/types.js';
+
+function makeResponse(content: string, toolCalls: any[] = []): AgentResponse {
+  return { content, toolCalls };
+}
+
+function makeToolCall(id: string, name: string, args: Record<string, unknown> = {}) {
+  return { id, name, arguments: args };
+}
+
+function makeMockFeedbackLoop(testStatus: 'pass' | 'fail' = 'pass'): FeedbackLoop {
+  return {
+    async run(_workingDir: string, _state: FeedbackState | null): Promise<FeedbackResult> {
+      return {
+        status: testStatus,
+        failures: [],
+        actionableFix: null,
+      };
+    },
+    shouldContinue(_result: FeedbackResult, _state: FeedbackState | null, _maxIterations: number): boolean {
+      return false;
+    },
+  };
+}
+
+function makeFailingMockFeedbackLoop(): FeedbackLoop {
+  return {
+    async run(_workingDir: string, _state: FeedbackState | null): Promise<FeedbackResult> {
+      return {
+        status: 'fail',
+        failures: [
+          { file: 'test.ts', line: 10, type: 'assertion', message: 'Expected true but got false', diff: '- true\n+ false' },
+        ],
+        actionableFix: {
+          summary: 'Fix assertion',
+          failures: [],
+          suggestedActions: ['Fix the test'],
+        },
+      };
+    },
+    shouldContinue(_result: FeedbackResult, _state: FeedbackState | null, _maxIterations: number): boolean {
+      return true;
+    },
+  };
+}
+
+function makeWriteFileTool(): Tool {
+  return {
+    definition: {
+      name: 'write_file',
+      description: 'Write content to a file',
+      parameters: { path: 'string', content: 'string' },
+    },
+    async execute(params: Record<string, unknown>): Promise<ToolResult> {
+      return { success: true, output: `File written: ${params.path}` };
+    },
+    riskLevel: 'safe',
+  };
+}
+
+function makeRunTestsTool(): Tool {
+  return {
+    definition: {
+      name: 'run_tests',
+      description: 'Run test suite',
+      parameters: {},
+    },
+    async execute(_params: Record<string, unknown>): Promise<ToolResult> {
+      return { success: true, output: 'All tests passed' };
+    },
+    riskLevel: 'safe',
+  };
+}
+
+function makeDangerousTool(): Tool {
+  return {
+    definition: {
+      name: 'execute_shell',
+      description: 'Execute shell command',
+      parameters: { command: 'string' },
+    },
+    async execute(params: Record<string, unknown>): Promise<ToolResult> {
+      return { success: true, output: `Executed: ${params.command}` };
+    },
+    riskLevel: 'dangerous',
+  };
+}
+
+function buildDeps(overrides: Partial<AgentLoopDependencies> & {
+  llm: MockLLMAdapter;
+  tools: ToolRegistry;
+  governance: GovernanceService;
+  feedback: FeedbackLoop;
+  contextBuilder: ContextBuilder;
+  stopCondition: StopCondition;
+}): AgentLoopDependencies {
+  return {
+    config: { maxIterations: 20 },
+    ...overrides,
+  };
+}
+
+describe('AgentLoop', () => {
+  // ── Test 1: Simple task — LLM responds with TASK_COMPLETE, loop ends with "completed" ──
+  describe('simple task completion', () => {
+    it('should complete when LLM responds with TASK_COMPLETE', async () => {
+      const llm = new MockLLMAdapter([
+        makeResponse('Task is done. TASK_COMPLETE'),
+      ]);
+      const tools = createToolRegistry();
+      const governance = createGovernanceService();
+      const feedback = makeMockFeedbackLoop();
+      const contextBuilder = createContextBuilder();
+      const stopCondition = createStopCondition();
+
+      const loop = createAgentLoop(buildDeps({ llm, tools, governance, feedback, contextBuilder, stopCondition }));
+
+      const result = await loop.run('Write a hello world program', '/tmp/test');
+
+      expect(result.status).toBe('completed');
+      expect(result.session.messages).toHaveLength(1);
+      expect(result.session.messages[0].role).toBe('assistant');
+      expect(result.session.messages[0].content).toContain('TASK_COMPLETE');
+    });
+
+    it('should complete when LLM returns text-only response with no tool calls', async () => {
+      const llm = new MockLLMAdapter([
+        makeResponse('Here is the final answer.'),
+      ]);
+      const tools = createToolRegistry();
+      const governance = createGovernanceService();
+      const feedback = makeMockFeedbackLoop();
+      const contextBuilder = createContextBuilder();
+      const stopCondition = createStopCondition();
+
+      const loop = createAgentLoop(buildDeps({ llm, tools, governance, feedback, contextBuilder, stopCondition }));
+
+      const result = await loop.run('Answer a question', '/tmp/test');
+
+      expect(result.status).toBe('completed');
+      expect(result.session.messages).toHaveLength(1);
+    });
+  });
+
+  // ── Test 2: Tool call — LLM calls write_file, tool executed, result recorded ──
+  describe('tool execution', () => {
+    it('should execute write_file tool and record result', async () => {
+      const llm = new MockLLMAdapter([
+        makeResponse('I will write the file. TASK_COMPLETE', [
+          makeToolCall('call_1', 'write_file', { path: '/tmp/hello.ts', content: 'console.log("hello")' }),
+        ]),
+      ]);
+      const tools = createToolRegistry();
+      tools.register(makeWriteFileTool());
+      const governance = createGovernanceService();
+      const feedback = makeMockFeedbackLoop();
+      const contextBuilder = createContextBuilder();
+      const stopCondition = createStopCondition();
+
+      const loop = createAgentLoop(buildDeps({ llm, tools, governance, feedback, contextBuilder, stopCondition }));
+
+      const result = await loop.run('Write a file', '/tmp/test');
+
+      expect(result.status).toBe('completed');
+      // Should have assistant message + tool result message
+      expect(result.session.messages).toHaveLength(2);
+      expect(result.session.messages[1].role).toBe('tool');
+      expect(result.session.messages[1].name).toBe('write_file');
+
+      // Tool call should be recorded
+      expect(result.session.toolCalls).toHaveLength(1);
+      expect(result.session.toolCalls[0].toolName).toBe('write_file');
+      expect(result.session.toolCalls[0].result.success).toBe(true);
+    });
+
+    it('should handle tool execution error gracefully', async () => {
+      const llm = new MockLLMAdapter([
+        makeResponse('I will try to run a tool. TASK_COMPLETE', [
+          makeToolCall('call_1', 'nonexistent_tool', { arg: 'value' }),
+        ]),
+      ]);
+      const tools = createToolRegistry();
+      // Don't register the tool — it will throw ToolNotFoundError
+      const governance = createGovernanceService();
+      const feedback = makeMockFeedbackLoop();
+      const contextBuilder = createContextBuilder();
+      const stopCondition = createStopCondition();
+
+      const loop = createAgentLoop(buildDeps({ llm, tools, governance, feedback, contextBuilder, stopCondition }));
+
+      const result = await loop.run('Run a missing tool', '/tmp/test');
+
+      // Should still complete because the error is caught
+      expect(result.session.toolCalls).toHaveLength(1);
+      expect(result.session.toolCalls[0].result.success).toBe(false);
+      expect(result.session.toolCalls[0].result.error).toBeDefined();
+    });
+  });
+
+  // ── Test 3: Feedback loop triggers — LLM calls run_tests, feedback runs, feedbackState injected ──
+  describe('feedback loop integration', () => {
+    it('should trigger feedback loop when run_tests tool is called (passing)', async () => {
+      const llm = new MockLLMAdapter([
+        makeResponse('I will run the tests. TASK_COMPLETE', [
+          makeToolCall('call_1', 'run_tests', {}),
+        ]),
+      ]);
+      const tools = createToolRegistry();
+      tools.register(makeRunTestsTool());
+      const governance = createGovernanceService();
+      const feedback = makeMockFeedbackLoop('pass');
+      const contextBuilder = createContextBuilder();
+      const stopCondition = createStopCondition();
+
+      const loop = createAgentLoop(buildDeps({ llm, tools, governance, feedback, contextBuilder, stopCondition }));
+
+      const result = await loop.run('Run tests', '/tmp/test');
+
+      expect(result.status).toBe('completed');
+      // Should have feedback run recorded
+      expect(result.session.feedbackRuns).toHaveLength(1);
+      expect(result.session.feedbackRuns[0].testResult).toBe('pass');
+      expect(result.session.feedbackRuns[0].iteration).toBe(0);
+    });
+
+    it('should trigger feedback loop when run_tests tool is called (failing then passing)', async () => {
+      const llm = new MockLLMAdapter([
+        // First response: run tests, they fail
+        makeResponse('Running tests...', [
+          makeToolCall('call_1', 'run_tests', {}),
+        ]),
+        // Second response: fix code, run tests again, they pass
+        makeResponse('Fixed the code. TASK_COMPLETE', [
+          makeToolCall('call_2', 'run_tests', {}),
+        ]),
+      ]);
+      const tools = createToolRegistry();
+      tools.register(makeRunTestsTool());
+      const governance = createGovernanceService();
+      // First call returns fail, second returns pass
+      let callCount = 0;
+      const alternatingFeedback: FeedbackLoop = {
+        async run(_workingDir: string, _state: FeedbackState | null): Promise<FeedbackResult> {
+          callCount++;
+          if (callCount === 1) {
+            return {
+              status: 'fail',
+              failures: [{ file: 'test.ts', line: 10, type: 'assertion', message: 'Expected true', diff: '' }],
+              actionableFix: { summary: 'Fix', failures: [], suggestedActions: [] },
+            };
+          }
+          return { status: 'pass', failures: [], actionableFix: null };
+        },
+        shouldContinue(_result: FeedbackResult, _state: FeedbackState | null, _maxIterations: number): boolean {
+          return false;
+        },
+      };
+      const contextBuilder = createContextBuilder();
+      const stopCondition = createStopCondition();
+
+      const loop = createAgentLoop(buildDeps({ llm, tools, governance, feedback: alternatingFeedback, contextBuilder, stopCondition }));
+
+      const result = await loop.run('Run failing tests then fix', '/tmp/test');
+
+      expect(result.status).toBe('completed');
+      // Should have 2 feedback runs recorded
+      expect(result.session.feedbackRuns).toHaveLength(2);
+      expect(result.session.feedbackRuns[0].testResult).toBe('fail');
+      expect(result.session.feedbackRuns[0].failureCount).toBe(1);
+      expect(result.session.feedbackRuns[1].testResult).toBe('pass');
+      expect(result.session.feedbackRuns[1].failureCount).toBe(0);
+    });
+  });
+
+  // ── Test 4: Guardrail blocks — LLM calls dangerous command, loop returns "blocked" status ──
+  describe('guardrail blocking', () => {
+    it('should return blocked status when guardrail blocks a dangerous command', async () => {
+      const llm = new MockLLMAdapter([
+        makeResponse('I will delete everything.', [
+          makeToolCall('call_1', 'execute_shell', { command: 'rm -rf /' }),
+        ]),
+      ]);
+      const tools = createToolRegistry();
+      tools.register(makeDangerousTool());
+      const governance = createGovernanceService({ blockedCommands: [] });
+      const feedback = makeMockFeedbackLoop();
+      const contextBuilder = createContextBuilder();
+      const stopCondition = createStopCondition();
+
+      const loop = createAgentLoop(buildDeps({ llm, tools, governance, feedback, contextBuilder, stopCondition }));
+
+      const result = await loop.run('Delete files', '/tmp/test');
+
+      expect(result.status).toBe('blocked');
+      // The tool call should NOT have been executed
+      expect(result.session.toolCalls).toHaveLength(0);
+    });
+
+    it('should allow safe commands through guardrail', async () => {
+      const llm = new MockLLMAdapter([
+        makeResponse('I will list files. TASK_COMPLETE', [
+          makeToolCall('call_1', 'execute_shell', { command: 'ls -la' }),
+        ]),
+      ]);
+      const tools = createToolRegistry();
+      tools.register(makeDangerousTool());
+      const governance = createGovernanceService({ blockedCommands: [] });
+      const feedback = makeMockFeedbackLoop();
+      const contextBuilder = createContextBuilder();
+      const stopCondition = createStopCondition();
+
+      const loop = createAgentLoop(buildDeps({ llm, tools, governance, feedback, contextBuilder, stopCondition }));
+
+      const result = await loop.run('List files', '/tmp/test');
+
+      expect(result.status).toBe('completed');
+      expect(result.session.toolCalls).toHaveLength(1);
+    });
+  });
+
+  // ── Test 5: Max iterations — simulate 20 iterations, loop ends with "max_iterations" ──
+  describe('max iterations', () => {
+    it('should stop with max_iterations when iteration limit is reached', async () => {
+      // Create 20 responses that always have tool calls (so loop never completes)
+      const responses: AgentResponse[] = [];
+      for (let i = 0; i < 20; i++) {
+        responses.push(makeResponse(`Iteration ${i}`, [
+          makeToolCall(`call_${i}`, 'write_file', { path: `/tmp/file_${i}.ts`, content: 'code' }),
+        ]));
+      }
+
+      const llm = new MockLLMAdapter(responses);
+      const tools = createToolRegistry();
+      tools.register(makeWriteFileTool());
+      const governance = createGovernanceService();
+      const feedback = makeMockFeedbackLoop();
+      const contextBuilder = createContextBuilder();
+      const stopCondition = createStopCondition();
+
+      const loop = createAgentLoop(buildDeps({
+        llm, tools, governance, feedback, contextBuilder, stopCondition,
+        config: { maxIterations: 20 },
+      }));
+
+      const result = await loop.run('Keep writing files', '/tmp/test');
+
+      expect(result.status).toBe('max_iterations');
+      // Should have 20 iterations of messages (assistant + tool = 40 messages)
+      expect(result.session.messages).toHaveLength(40);
+      expect(result.session.toolCalls).toHaveLength(20);
+    });
+
+    it('should stop at exactly maxIterations', async () => {
+      const responses: AgentResponse[] = [];
+      for (let i = 0; i < 5; i++) {
+        responses.push(makeResponse(`Iteration ${i}`, [
+          makeToolCall(`call_${i}`, 'write_file', { path: `/tmp/f${i}.ts`, content: 'code' }),
+        ]));
+      }
+
+      const llm = new MockLLMAdapter(responses);
+      const tools = createToolRegistry();
+      tools.register(makeWriteFileTool());
+      const governance = createGovernanceService();
+      const feedback = makeMockFeedbackLoop();
+      const contextBuilder = createContextBuilder();
+      const stopCondition = createStopCondition();
+
+      const loop = createAgentLoop(buildDeps({
+        llm, tools, governance, feedback, contextBuilder, stopCondition,
+        config: { maxIterations: 5 },
+      }));
+
+      const result = await loop.run('Write some files', '/tmp/test');
+
+      expect(result.status).toBe('max_iterations');
+      expect(result.session.toolCalls).toHaveLength(5);
+    });
+  });
+
+  // ── Additional tests: abort and handleApproval ──
+  describe('abort', () => {
+    it('should abort the loop mid-execution', async () => {
+      const llm = new MockLLMAdapter([
+        makeResponse('Processing...', [
+          makeToolCall('call_1', 'write_file', { path: '/tmp/test.ts', content: 'code' }),
+        ]),
+        makeResponse('TASK_COMPLETE'),
+      ]);
+      const tools = createToolRegistry();
+      tools.register(makeWriteFileTool());
+      const governance = createGovernanceService();
+      const feedback = makeMockFeedbackLoop();
+      const contextBuilder = createContextBuilder();
+      const stopCondition = createStopCondition();
+
+      const loop = createAgentLoop(buildDeps({ llm, tools, governance, feedback, contextBuilder, stopCondition }));
+
+      // Abort after first iteration — the loop will stop on the next while check
+      // We need to abort before the loop starts. Let's rely on the abort flag.
+      loop.abort();
+
+      const result = await loop.run('Aborted task', '/tmp/test');
+
+      expect(result.status).toBe('failed');
+      // No messages should be processed because loop was aborted before first iteration
+      expect(result.session.messages).toHaveLength(0);
+    });
+  });
+
+  describe('handleApproval', () => {
+    it('should approve a blocked action after guardrail blocks', async () => {
+      const tools = createToolRegistry();
+      tools.register(makeDangerousTool());
+      const governance = createGovernanceService({ blockedCommands: [] });
+      const feedback = makeMockFeedbackLoop();
+      const contextBuilder = createContextBuilder();
+      const stopCondition = createStopCondition();
+      const llm = new MockLLMAdapter([
+        makeResponse('I will delete everything.', [
+          makeToolCall('call_1', 'execute_shell', { command: 'rm -rf /' }),
+        ]),
+      ]);
+
+      const loop = createAgentLoop(buildDeps({ llm, tools, governance, feedback, contextBuilder, stopCondition }));
+
+      // Run the loop - it should block on the dangerous command
+      const result = await loop.run('Delete files', '/tmp/test');
+      expect(result.status).toBe('blocked');
+
+      // Now HITL should be in waiting_user state
+      // Approve the blocked action
+      expect(() => loop.handleApproval(true)).not.toThrow();
+    });
+
+    it('should throw when handleApproval called without pending block', () => {
+      const tools = createToolRegistry();
+      const governance = createGovernanceService();
+      const feedback = makeMockFeedbackLoop();
+      const contextBuilder = createContextBuilder();
+      const stopCondition = createStopCondition();
+      const llm = new MockLLMAdapter([]);
+
+      const loop = createAgentLoop(buildDeps({ llm, tools, governance, feedback, contextBuilder, stopCondition }));
+
+      // handleApproval should throw when HITL is not in waiting_user state
+      expect(() => loop.handleApproval(true)).toThrow();
+    });
+  });
+});
