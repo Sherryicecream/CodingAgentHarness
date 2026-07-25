@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git commit -m 'Update SPEC: add online deployment plan and clarify bare-loop architecture *)"
+    ]
+  }
+}
