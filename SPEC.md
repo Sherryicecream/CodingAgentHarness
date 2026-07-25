@@ -37,7 +37,39 @@ Agent = LLM + Harness。LLM 只负责"决定下一步做什么"，而 harness �
 
 ## 3. 功能规约
 
-### 3.1 Agent 主循环
+### 3.1 Agent 主循环（裸循环 + 扩展点）
+
+**设计原则**：AgentLoop 本身是一个**最小编排核心**，不包含任何具体业务逻辑。所有机制（工具、护栏、反馈、记忆、LLM 调用）均通过接口注入，循环只负责按顺序调用它们。这确保了：
+- 每个机制可独立 mock 测试（替换单个注入即可）
+- 新增机制无需修改循环代码（开闭原则）
+- 循环本身是确定性状态机（移除 LLM 后仍可单测）
+
+**裸循环骨架**：
+```
+1. ContextBuilder.build(task, memory, config) → 构建上下文
+2. Guardrail.preCheck(action)                → 护栏预检
+3. LLMAdapter.sendMessage(context)           → 调用 LLM
+4. ResponseParser.parse(response)            → 解析动作
+5. Guardrail.postCheck(action)               → 护栏后检
+6. ToolRegistry.execute(action)              → 分发执行
+7. FeedbackLoop.run(workingDir)              → 反馈闭环
+8. StopCondition.check(state)                → 停机判断
+9. 若未停机 → 回到第 1 步（携带反馈状态）
+```
+
+**六大维度如何映射到扩展点**：
+
+| 维度 | 对应扩展点 | 注入方式 |
+|------|-----------|---------|
+| 决策封装 | AgentLoop 编排逻辑本身 | 内置 |
+| 动作/工具 | ToolRegistry | 构造注入 |
+| 上下文与记忆 | ContextBuilder + MemoryStore | 构造注入 |
+| 治理护栏 | Guardrail（preCheck + postCheck） | 构造注入 |
+| 反馈闭环 | FeedbackLoop | 构造注入 |
+| 配置 | ConfigLoader → 各组件读取 | 启动时加载 |
+
+**扩展点**（协作/多 agent）预留但不深入实现：
+- `AgentLoop` 可被包装为 `Tool`，从而支持多 agent 编排（子 agent 作为工具调用）
 
 - **输入**：用户自然语言任务描述
 - **行为**：组织上下文 → 护栏预检 → 调用 LLM → 解析动作 → 工具分发 → 反馈回灌 → 停机判断
@@ -97,9 +129,15 @@ Agent = LLM + Harness。LLM 只负责"决定下一步做什么"，而 harness �
 
 ### 3.8 Web 面板
 
+**本地模式**（`harness web`）：
 - **实时监控**：显示当前 agent 状态、对话流、每步工具调用
 - **历史回顾**：会话列表，可展开查看完整的对话历史和反馈修正记录
 - **技术**：本地 HTTP 服务 + React 前端，仅 localhost 访问
+
+**线上部署**（满足通用要求 §5.9）：
+- 将 Web 面板部署到 Vercel（免费额度），提供公网可访问 URL
+- 线上版为只读历史回顾 + 配置管理页面，不依赖本地 agent 实例
+- 本地 agent 运行结束后，可选将会话数据推送到线上版
 
 ---
 
