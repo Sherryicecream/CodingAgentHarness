@@ -1,0 +1,362 @@
+# SPEC: Coding Agent Harness
+
+> AI4SE 期末项目 · A 类 · Coding Agent Harness
+> 2026-07-25
+
+---
+
+## 1. 问题陈述
+
+### 要解决什么问题？
+
+当前 AI 编码工具（Claude Code、Cursor、Copilot 等）能生成代码，但普遍缺乏**可靠的反馈闭环**——工具写代码后是否运行测试、是否根据测试结果修正，往往依赖 LLM 自行判断（一句提示词），而非确定性工程机制。本项目要构建一个 **Coding Agent Harness**，将反馈闭环作为一等公民编码进系统：写代码 → 自动运行测试 → 解析失败 → 分类错误 → 回灌修正 → 循环直到通过。
+
+### 目标用户
+
+希望通过 AI 辅助编程，但需要**可控、可审计、可纠错**的开发者。他们不信任"全靠 LLM 自觉"的黑盒，而是需要一个有确定性工程保证的工具。
+
+### 为什么值得做？
+
+Agent = LLM + Harness。LLM 只负责"决定下一步做什么"，而 harness 负责把这一决策变成稳定、可靠、可自我修正的系统。当 LLM 能力趋同时，工程化的 harness 层才是区分真正有用工具和"聊天机器人套壳"的关键。
+
+---
+
+## 2. 用户故事
+
+| # | 用户故事 | 验收标准 |
+|---|---------|---------|
+| 1 | 作为开发者，我输入一个编程任务，agent 能自动编写代码并运行测试 | 输入任务后，agent 产出代码文件 + 测试结果 |
+| 2 | 作为开发者，当 agent 写的代码导致测试失败时，它能自动分析失败原因并修正代码 | 注入失败后，agent 在 5 轮内修正到测试通过 |
+| 3 | 作为开发者，当 agent 试图执行危险命令（如 `rm -rf`）时，系统会拦截并要求我确认 | 危险命令被拦截，未经确认不执行 |
+| 4 | 作为开发者，我能在 Web 面板上实时看到 agent 在做什么、每步工具调用及其结果 | Web 面板显示当前 agent 状态和工具调用记录 |
+| 5 | 作为开发者，我能查看历史会话，回顾 agent 的决策过程和修正次数 | 历史会话页面列出所有会话，可展开查看详情 |
+| 6 | 作为开发者，首次使用时有安全引导帮我配置 API Key（隐藏输入、不写磁盘明文） | 引导流程完成，key 存入系统密钥链 |
+| 7 | 作为开发者，我可以通过配置文件声明 agent 的行为规则（如"不要修改 src/config 下的文件"） | 配置规则被 agent 遵守，违规操作被拦截 |
+
+---
+
+## 3. 功能规约
+
+### 3.1 Agent 主循环
+
+- **输入**：用户自然语言任务描述
+- **行为**：组织上下文 → 护栏预检 → 调用 LLM → 解析动作 → 工具分发 → 反馈回灌 → 停机判断
+- **输出**：任务完成 / 失败 / 需要人工介入
+- **停机条件**：任务完成（LLM 声明完成 + 测试通过）或 达到最大轮次（20 轮）或 用户手动终止
+- **错误处理**：LLM 调用失败重试 3 次；工具执行异常回灌给 LLM 尝试修复
+
+### 3.2 工具系统
+
+| 工具 | 功能 | 风险等级 |
+|------|------|---------|
+| `read_file` | 读取文件内容 | safe |
+| `write_file` | 写入/创建文件 | moderate |
+| `execute_shell` | 执行 shell 命令 | moderate |
+| `run_tests` | 运行项目测试 | safe |
+| `search_code` | 代码搜索 (grep) | safe |
+| `git_diff` | 查看 git 变更 | safe |
+| `git_commit` | 提交代码 | dangerous |
+
+- **参数校验**：每个工具有 Zod schema 校验参数
+- **结果格式化**：统一 `{ success, output, error? }` 结构
+
+### 3.3 反馈闭环 ★ 重点维度
+
+- **流程**：TestRunner → ResultParser → FailureClassifier → FixSuggestionBuilder → 回灌 AgentLoop
+- **TestRunner**：执行 `npm test` 等测试命令，捕获 stdout/stderr/exit code
+- **ResultParser**：解析测试输出，提取失败文件、行号、错误类型、diff
+- **FailureClassifier**：规则引擎分类为 syntax / assertion / timeout / runtime
+- **FixSuggestionBuilder**：构建结构化修复上下文注入到下一轮 LLM 调用
+- **循环控制**：最多 5 轮修正，超出则提示人工介入
+- **可 Mock**：TestRunner 可注入 mock 输出，其余步骤为纯函数
+
+### 3.4 护栏系统
+
+- **危险命令列表**：`rm -rf`、`DROP TABLE`、`git push --force`、`npm publish`、`chmod 777`、任何包含 `>/dev/sda` 的操作
+- **拦截行为**：暂停 agent 循环，向用户展示命令详情，等待确认/拒绝
+- **白名单**：用户可在配置中声明可信目录或命令前缀
+- **HITL 状态机**：`running → blocked → waiting_user → approved → running` 或 `running → blocked → waiting_user → rejected → running(跳过)`
+
+### 3.5 记忆系统
+
+- **存储**：SQLite 本地数据库，按项目组织
+- **记忆类型**：convention（代码规范）、decision（设计决策）、knowledge（代码库知识）、rule（用户规则）
+- **检索**：基于关键词 + 可选向量相似度，按需注入上下文
+- **跨会话持久化**：记忆按项目路径关联，同一项目不同会话共享记忆
+
+### 3.6 配置系统
+
+- **配置位置**：项目根目录 `.harness/config.yaml`
+- **可配置项**：工具白名单/黑名单、最大轮次、测试命令、文件忽略规则、危险命令自定义列表
+- **加载时机**：Agent 启动时加载，变更需重启
+
+### 3.7 CLI 入口
+
+- **命令**：`harness`（启动交互式会话）、`harness web`（启动 Web 面板）、`harness config`（凭据管理）
+- **交互模式**：REPL 风格，用户输入任务，agent 实时输出执行过程
+
+### 3.8 Web 面板
+
+- **实时监控**：显示当前 agent 状态、对话流、每步工具调用
+- **历史回顾**：会话列表，可展开查看完整的对话历史和反馈修正记录
+- **技术**：本地 HTTP 服务 + React 前端，仅 localhost 访问
+
+---
+
+## 4. 非功能性需求
+
+### 性能
+- Agent 主循环单步延迟 < 500ms（不含 LLM API 调用）
+- Web 面板首次加载 < 2s
+- SQLite 记忆查询 < 100ms
+
+### 安全（凭据威胁模型）
+
+| 威胁 | 对策 |
+|------|------|
+| API Key 硬编码 | 代码中无任何 key，仅从系统密钥链读取 |
+| API Key 提交到 Git | `.gitignore` 覆盖；pre-commit hook 扫描 |
+| API Key 泄露到日志 | 日志输出前过滤替换为 `***` |
+| 进程环境变量可见 | 不从 `.env` 读 key；运行时从密钥链读入内存 |
+| 首次运行无引导 | 引导式隐藏输入 → 存储到 Windows Credential Manager |
+
+### 可用性
+- 单命令安装：`npm install -g @harness/cli`
+- 首次运行自动引导配置
+- 错误信息清晰，指明是哪个环节失败
+
+### 可观测性
+- 所有工具调用有日志记录
+- 反馈闭环每轮迭代有统计（失败数、修正是否成功）
+- Web 面板可视化展示运行状态
+
+---
+
+## 5. 系统架构
+
+```
+┌─────────────────────────────────────────────────┐
+│                   @harness/cli                    │
+│           (CLI 入口, 交互式对话, 启动 agent)        │
+│             依赖: @harness/core                   │
+└─────────────────────┬───────────────────────────┘
+                      │
+┌─────────────────────┴───────────────────────────┐
+│                   @harness/web                    │
+│    (本地 Web 服务, 实时监控面板 + 历史会话回顾)     │
+│             依赖: @harness/core                   │
+└─────────────────────┬───────────────────────────┘
+                      │
+┌─────────────────────┴───────────────────────────┐
+│                  @harness/core                    │
+│                                                   │
+│  ┌─────────┐ ┌──────────┐ ┌───────────────────┐ │
+│  │AgentLoop│ │ToolRegistry│ │Guardrail         │ │
+│  │(主循环)  │ │(工具分发)  │ │(危险动作拦截)     │ │
+│  └────┬────┘ └──────────┘ └───────────────────┘ │
+│       │                                           │
+│  ┌────┴────────────────────────────────────────┐ │
+│  │          FeedbackLoop ★ 重点深入 ★           │ │
+│  │  ┌──────────┐ ┌──────────┐ ┌────────────┐  │ │
+│  │  │TestRunner│ │ResultParser│ │FixStrategy │  │ │
+│  │  └──────────┘ └──────────┘ └────────────┘  │ │
+│  └─────────────────────────────────────────────┘ │
+│                                                   │
+│  ┌──────────┐ ┌──────────────┐ ┌──────────────┐ │
+│  │MemoryStore│ │ConfigLoader  │ │LLMAdapter    │ │
+│  └──────────┘ └──────────────┘ └──────────────┘ │
+└─────────────────────────────────────────────────┘
+```
+
+### 核心接口
+
+```typescript
+// LLM 抽象层
+interface LLMAdapter {
+  sendMessage(context: AgentContext): Promise<AgentResponse>;
+}
+
+// 工具
+interface Tool {
+  definition: ToolDefinition;
+  execute(params: Record<string, unknown>): Promise<ToolResult>;
+  riskLevel: "safe" | "moderate" | "dangerous";
+}
+
+// 反馈闭环
+interface FeedbackLoop {
+  run(workingDir: string): Promise<FeedbackResult>;
+}
+
+// Agent 主循环
+interface AgentLoop {
+  run(task: string): Promise<RunResult>;
+}
+```
+
+### 数据流
+
+```
+用户输入 → 构建上下文 → 护栏预检 → LLM 调用 → 解析动作
+    → 工具执行 → 反馈闭环（测试→解析→分类→回灌）
+    → LLM 再次调用（携带反馈）→ ... → 测试通过 → 停机
+```
+
+---
+
+## 6. 数据模型
+
+### 会话
+```typescript
+interface Session {
+  id: string;
+  createdAt: Date;
+  task: string;
+  messages: Message[];
+  toolCalls: ToolCallRecord[];
+  feedbackRuns: FeedbackRun[];
+  status: "running" | "blocked" | "completed" | "failed";
+  conclusion: string | null;
+}
+```
+
+### 工具调用记录
+```typescript
+interface ToolCallRecord {
+  timestamp: Date;
+  toolName: string;
+  params: Record<string, unknown>;
+  result: ToolResult;
+  guardrailCheck: "passed" | "blocked" | "approved_by_user";
+}
+```
+
+### 反馈运行记录
+```typescript
+interface FeedbackRun {
+  iteration: number;
+  testResult: "pass" | "fail";
+  failureCount: number;
+  fixApplied: boolean;
+  timeSpent: number;
+}
+```
+
+### 记忆条目
+```typescript
+interface MemoryEntry {
+  id: string;
+  type: "convention" | "decision" | "knowledge" | "rule";
+  content: string;
+  source: string;
+  createdAt: Date;
+  lastAccessedAt: Date;
+}
+```
+
+### 存储方案
+| 数据 | 存储 | 位置 |
+|------|------|------|
+| 会话记录 | JSON 文件 | `~/.harness/sessions/` |
+| 记忆 | SQLite | `~/.harness/memory.db` |
+| 配置 | YAML | `.harness/config.yaml` |
+| 凭据 | 系统密钥链 | Windows Credential Manager |
+
+---
+
+## 7. 凭据与分发设计
+
+### 凭据管理流程
+1. 首次运行 → 检测无 key → 引导隐藏输入
+2. 存储到 Windows Credential Manager（key: `harness/deepseek-api-key`）
+3. 发送最小 API 请求验证 → 成功则确认，失败则提示重试
+4. 日常使用：启动时从密钥链读取 → 注入 LLMAdapter → 运行
+5. 管理命令：`harness config status`（不回显明文）、`harness config update`、`harness config clear`
+
+### 分发
+| 项目 | 决策 |
+|------|------|
+| 形态 | npm 包 |
+| 包结构 | `@harness/core` + `@harness/cli` + `@harness/web` |
+| 安装 | `npm install -g @harness/cli` |
+| 运行 | `harness`（CLI）；`harness web`（Web 面板） |
+| 平台 | Node.js 18+，Windows / macOS / Linux |
+| 已知限制 | Web 面板仅 localhost；Windows Credential Manager 需 Windows 平台 |
+
+---
+
+## 8. 领域与机制设计（A 类额外要求）
+
+### 领域分析（Coding 场景）
+
+| 维度 | 具体内容 |
+|------|---------|
+| **反馈信号** | 测试结果（pass/fail）、lint 输出、类型检查错误——客观、确定、可解析 |
+| **危险动作** | `rm -rf`、`DROP TABLE`、`git push --force`、`npm publish`、修改 `.git` 目录 |
+| **所需工具** | 文件读写、shell 执行、测试运行、代码搜索、git 操作 |
+| **记忆需求** | 项目代码规范、历史设计决策、用户偏好、常见错误模式 |
+
+### 重点维度：反馈闭环
+
+**为何选它**：Coding Agent 的核心价值是"写错了能自己发现并修正"。治理（护栏）更多是模式匹配，记忆自己实现存储检索工程量大但核心逻辑薄——反馈闭环在工程深度和工作量之间平衡最好。
+
+**编码实现（非提示词）**：
+1. `TestRunner.run()` — 执行测试命令，捕获输出
+2. `ResultParser.parse(output)` — 正则+AST 解析，提取文件/行号/错误类型/diff
+3. `FailureClassifier.classify(failures)` — 规则引擎分类为 syntax/assertion/timeout/runtime
+4. `FixSuggestionBuilder.build(failures)` — 构建结构化修复上下文
+5. 回灌到 `AgentLoop` — 下一轮 LLM 调用携带 `feedbackState`
+6. 循环控制 — 最多 5 轮，超出人工介入
+
+**全部可 Mock 测试**：每一步都是纯函数或注入依赖，无需真实 LLM。
+
+---
+
+## 9. 技术选型与理由
+
+| 技术 | 选择 | 理由 |
+|------|------|------|
+| 语言 | TypeScript | 类型安全，npm 生态，适合 monorepo 结构 |
+| 运行时 | Node.js 18+ | LTS 版本，稳定 |
+| LLM 供应商 | DeepSeek | API 兼容 OpenAI 格式，性价比高，国内可访问 |
+| LLM SDK | `openai` npm 包 | 兼容 DeepSeek API，生态成熟 |
+| CLI 框架 | Ink (React for CLI) | React 语法写 CLI，组件化 |
+| Web 前端 | React + Vite | 轻量，快速开发 |
+| 数据库 | better-sqlite3 | 零配置本地 SQLite，同步 API |
+| 凭据存储 | keytar (跨平台密钥链) | 支持 Windows/macOS/Linux |
+| 测试框架 | Vitest | 快，TypeScript 原生支持 |
+| 打包 | tsup | 轻量 TypeScript 打包 |
+| CI | GitHub Actions | 仓库在 GitHub，使用 `.github/workflows/ci.yml` |
+| monorepo | npm workspaces | 原生支持，无需额外工具 |
+
+---
+
+## 10. 验收标准
+
+| 功能 | 验收标准 |
+|------|---------|
+| Agent 主循环 | 输入任务 → agent 产出代码，循环可被 mock LLM 驱动测试 |
+| 反馈闭环 | 注入测试失败 → agent 在 5 轮内修正到通过（mock 下可验证） |
+| 护栏 | 传入危险命令 → 被拦截，等待用户确认 |
+| 工具系统 | 所有工具可注册、可执行、参数校验正确 |
+| 记忆 | 跨会话可读写记忆，按项目隔离 |
+| CLI | `harness` 启动交互式会话，正常工作 |
+| Web 面板 | `harness web` 启动，浏览器可访问，显示实时状态和历史 |
+| 凭据 | 首次运行引导配置，key 不入源码、不入 Git、不入日志 |
+| 分发 | `npm install -g` 后可运行 |
+| Mock 测试 | 所有核心机制有 mock LLM 驱动的确定性单元测试 |
+| 机制演示 | 可复现：护栏拦截、反馈修正、重点维度行为 |
+
+---
+
+## 11. 风险与未决问题
+
+| 风险 | 缓解措施 |
+|------|---------|
+| DeepSeek 工具调用稳定性不如 Claude | 抽象层支持切换供应商，失败时重试 |
+| 测试输出格式多样（Jest/pytest/go test） | ResultParser 采用插件式，先支持 Jest |
+| 反馈闭环可能多轮修正失败 | 最多 5 轮，超出后暂停请求人工介入 |
+| 记忆系统复杂度可能超出时间 | 先做关键词检索，向量检索作为可选增强 |
+| Web 面板实时更新实现复杂度 | 使用 SSE (Server-Sent Events) 推送 agent 状态 |
+| Windows Credential Manager 兼容性 | 使用 keytar 库跨平台抽象，非 Windows 平台 fallback 到加密文件 |
+| 线上部署 URL 要求 | 通用要求 §5.9 要求 WebUI 线上 URL，但本项目 Web 面板为本地服务。若必须满足，可部署一个只读历史回顾页面到 Vercel/Render（免费额度），通过 WebSocket/SSE 连接本地 agent 实例 |
