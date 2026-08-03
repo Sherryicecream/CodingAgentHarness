@@ -59,7 +59,7 @@ cd packages/core && npx tsc --noEmit  # 应通过
 // LLM 层
 interface LLMAdapter { sendMessage(context: AgentContext): Promise<AgentResponse>; }
 interface AgentContext { messages: Message[]; tools: ToolDefinition[]; memory: MemoryEntry[]; config: AgentConfig; feedbackState: FeedbackState | null; }
-interface AgentResponse { content: string; toolCalls: ToolCallRequest[]; }
+interface AgentResponse { content: string; toolCalls: ToolCallRequest[]; rawContent?: string; responseId?: string; model?: string; latencyMs?: number; usage?: { promptTokens: number; completionTokens: number; totalTokens: number; }; }
 interface ToolCallRequest { id: string; name: string; arguments: Record<string, unknown>; }
 interface Message { role: "system" | "user" | "assistant" | "tool"; content: string; toolCallId?: string; name?: string; }
 
