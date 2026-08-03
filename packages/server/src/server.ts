@@ -26,7 +26,7 @@ if (process.env.NODE_ENV === 'production') {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Harness server running at http://localhost:${PORT}`);
+  console.log(`Harness 服务已启动：http://localhost:${PORT}`);
 });
 
 export default app;

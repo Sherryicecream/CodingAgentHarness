@@ -79,7 +79,7 @@ agentRouter.post('/run', async (req: Request, res: Response) => {
   try {
     const { task, workingDir, sessionId } = req.body;
     if (!task || !workingDir || !sessionId) {
-      res.status(400).json({ error: 'task, workingDir, and sessionId are required' });
+      res.status(400).json({ error: '缺少必填参数：task、workingDir、sessionId' });
       return;
     }
 
@@ -136,7 +136,7 @@ agentRouter.post('/test-key', async (_req: Request, res: Response) => {
     const storedKey = credentialStore.getKey('harness/deepseek-api-key');
     const apiKey = storedKey || process.env.DEEPSEEK_API_KEY;
     if (!apiKey) {
-      res.json({ valid: false, error: 'No API key configured' });
+      res.json({ valid: false, error: '未配置 API Key' });
       return;
     }
 
@@ -158,10 +158,10 @@ agentRouter.post('/test-key', async (_req: Request, res: Response) => {
       res.json({ valid: true });
     } else {
       const text = await response.text();
-      res.json({ valid: false, error: `API returned ${response.status}: ${text}` });
+      res.json({ valid: false, error: `API 返回 ${response.status}: ${text}` });
     }
   } catch (err: any) {
-    res.json({ valid: false, error: `Connection failed: ${err.message}` });
+    res.json({ valid: false, error: `连接失败：${err.message}` });
   }
 });
 
@@ -169,13 +169,13 @@ agentRouter.post('/test-key', async (_req: Request, res: Response) => {
 agentRouter.post('/approve', (req: Request, res: Response) => {
   const { sessionId } = req.body;
   if (!sessionId) {
-    res.status(400).json({ error: 'sessionId is required' });
+    res.status(400).json({ error: '缺少必填参数：sessionId' });
     return;
   }
 
   const loop = activeLoops.get(sessionId);
   if (!loop) {
-    res.status(404).json({ error: 'Session not found or not in blocked state' });
+    res.status(404).json({ error: '未找到会话，或会话不在阻断状态' });
     return;
   }
 
@@ -188,13 +188,13 @@ agentRouter.post('/approve', (req: Request, res: Response) => {
 agentRouter.post('/reject', (req: Request, res: Response) => {
   const { sessionId } = req.body;
   if (!sessionId) {
-    res.status(400).json({ error: 'sessionId is required' });
+    res.status(400).json({ error: '缺少必填参数：sessionId' });
     return;
   }
 
   const loop = activeLoops.get(sessionId);
   if (!loop) {
-    res.status(404).json({ error: 'Session not found or not in blocked state' });
+    res.status(404).json({ error: '未找到会话，或会话不在阻断状态' });
     return;
   }
 

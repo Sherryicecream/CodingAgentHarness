@@ -35,20 +35,20 @@ export function SessionHistory() {
       });
   }, []);
 
-  if (loading) return <div className="loading-text">Loading sessions...</div>;
-  if (error) return <div className="event-error">Error: {error}</div>;
+  if (loading) return <div className="loading-text">加载会话列表...</div>;
+  if (error) return <div className="event-error">错误：{error}</div>;
   if (sessions.length === 0) {
-    return <div className="empty-text">No sessions yet. Run a task from the Chat tab first.</div>;
+    return <div className="empty-text">暂无会话记录。请先在 Chat 页面运行一个任务。</div>;
   }
 
   return (
     <div>
-      <h2 className="section-title">Session History</h2>
+      <h2 className="section-title">历史会话</h2>
       <div className="session-history">
         {sessions.map(session => {
           const isExpanded = expandedId === session.id;
           const createdAt = new Date(session.createdAt);
-          const timeStr = createdAt.toLocaleString();
+          const timeStr = createdAt.toLocaleString('zh-CN');
 
           return (
             <div
@@ -62,7 +62,7 @@ export function SessionHistory() {
                   <div className="session-time">{timeStr}</div>
                 </div>
                 <span className={`badge badge-${session.status}`}>
-                  {session.status}
+                  {session.status === 'completed' ? '已完成' : session.status === 'failed' ? '失败' : session.status === 'blocked' ? '已拦截' : '运行中'}
                 </span>
               </div>
 
@@ -71,9 +71,9 @@ export function SessionHistory() {
               )}
 
               <div className="session-meta">
-                {session.feedbackRuns?.length || 0} feedback iteration(s)
+                {session.feedbackRuns?.length || 0} 次反馈迭代
                 {' — '}
-                {isExpanded ? 'Click to collapse' : 'Click to expand'}
+                {isExpanded ? '点击收起' : '点击展开'}
               </div>
 
               {isExpanded && (

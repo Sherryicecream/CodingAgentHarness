@@ -20,7 +20,7 @@ sessionRouter.get('/:id', async (req: Request, res: Response) => {
   try {
     const session = await sessionStore.load(req.params.id);
     if (!session) {
-      res.status(404).json({ error: 'Session not found' });
+      res.status(404).json({ error: '未找到会话' });
       return;
     }
     res.json({ session });

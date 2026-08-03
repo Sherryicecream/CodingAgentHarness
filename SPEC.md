@@ -375,7 +375,7 @@ interface MemoryEntry {
 | 测试框架 | Vitest | 快，TypeScript 原生支持 |
 | 打包 | tsup | 轻量 TypeScript 打包 |
 | 部署 | 阿里云 ECS (Docker) | 国内可访问，弹性计算，按量付费 |
-| 备选部署 | Render (免费) | 海外节点，750h/月免费额度 |
+| 备选部署 | 阿里云 ECS (Docker) / Render (备选免费版) | 国内可访问，弹性计算；Render 海外节点，750h/月免费额度 |
 | CI | GitHub Actions | 仓库在 GitHub，使用 `.github/workflows/ci.yml` |
 | monorepo | npm workspaces | 原生支持，无需额外工具 |
 
@@ -391,7 +391,7 @@ interface MemoryEntry {
 | 工具系统 | 所有工具可注册、可执行、参数校验正确 |
 | 记忆 | 跨会话可读写记忆，按项目隔离 |
 | CLI | `harness` 启动本地服务，浏览器可访问 |
-| Web 线上部署 | Render 部署，公网 URL 可访问，功能完整 |
+| Web 线上部署 | 阿里云 ECS 部署，公网 URL 可访问，功能完整 |
 | 凭据 | 首次运行引导配置，key 不入源码、不入 Git、不入日志 |
 | 分发 | `npm install -g` 后可运行 |
 | Mock 测试 | 所有核心机制有 mock LLM 驱动的确定性单元测试 |
