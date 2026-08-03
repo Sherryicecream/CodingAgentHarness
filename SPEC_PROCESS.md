@@ -124,3 +124,58 @@ The brainstorming phase (using the `superpowers:brainstorming` skill) produced s
 4. **Deployment assumptions**: The brainstorming assumed Render would work seamlessly. The 15-minute sleep limitation on free tier was discovered late. A paid tier recommendation should have been included.
 
 5. **Windows compatibility**: The project uses Unix-style paths in some shell commands. Windows compatibility (Git Bash / WSL requirement) should have been a design consideration from the start.
+
+---
+
+## Cold Start Validation
+
+### Verification Info
+
+| Field | Value |
+|-------|-------|
+| **Agent** | ChatGPT |
+| **Date** | 2026-08-03 |
+| **Selected task** | Task 6 (LLMAdapter interface) |
+| **Session** | Fresh conversation, no prior context or memory |
+| **Input** | SPEC.md + PLAN.md only |
+
+### Task 6 Attempt
+
+The agent was asked to implement Task 6 (LLMAdapter interface) using only the SPEC and PLAN documents. It was instructed to stop at any point of uncertainty rather than guess.
+
+**Where the agent paused:**
+
+1. **Type dependency question**: "Task 6 depends on Task 2 (types.ts). Do you expect each task to strictly depend on prior tasks, or should each task be independently runnable?"
+
+2. **Test approach question**: "Should interface tests use `tsc --noEmit` + Vitest, or just Vitest with `import type`?"
+
+3. **Import style question**: "Should all type imports use `import type` syntax?"
+
+### SPEC/PLAN Defects Exposed
+
+Three ambiguities were identified that the original author (Claude Code) and the human had not noticed — they were shared tacit knowledge between the primary developer agent and the spec writer:
+
+| # | Defect | Location | Severity | Resolution |
+|---|--------|----------|----------|------------|
+| 1 | **AgentContext lifecycle undefined** | SPEC §3.1 | Medium | Added: "每轮循环重新创建", messages "累积增长", feedbackState 由 AgentLoop 维护 |
+| 2 | **AgentResponse lacks debug fields** | types.ts, PLAN Task 2 | Low | Added optional fields: `rawContent`, `responseId`, `model`, `latencyMs`, `usage` |
+| 3 | **Message→OpenAI mapping missing** | SPEC §3.1 | Medium | Added explicit mapping table for system/user/assistant/tool roles |
+
+### Misinterpretations
+
+The agent's understanding of the architecture was consistent with the SPEC. No significant misinterpretations occurred. The agent correctly identified that:
+
+- The harness is a "bare orchestrator" with injected interfaces
+- The LLMAdapter is the single point of LLM contact
+- The interface is compile-time only, with no runtime behavior to test
+
+### Revisions Made
+
+Commit `be10126`:
+- `packages/core/src/types.ts`: AgentResponse gained 5 optional fields
+- `SPEC.md`: Added context lifecycle paragraph (§3.1) and Message→OpenAI mapping (§3.1)
+- `PLAN.md`: Updated AgentResponse definition to match types.ts
+
+### Assessment
+
+**SPEC quality: Good.** The agent was able to understand the architecture, identify the correct files, and write correct implementation code from the documents alone. The three defects found were real but minor — none required architectural changes. The SPEC was sufficiently precise for a new agent to begin implementation without major confusion.
