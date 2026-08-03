@@ -352,6 +352,7 @@ interface MemoryEntry {
 | LLM 供应商 | DeepSeek | API 兼容 OpenAI 格式，性价比高，国内可访问 |
 | LLM SDK | `openai` npm 包 | 兼容 DeepSeek API，生态成熟 |
 | Web 框架 | Express + React (Vite) | Express 轻量稳定，React 生态成熟 |
+| 设计系统 | Open Design | 使用 Open Design 方法论定义 DESIGN.md，含完整的颜色/字体/间距/组件规范 |
 | CLI 框架 | 轻量封装 | 复用 core，不引入重量级 CLI 框架 |
 | 数据库 | better-sqlite3 | 零配置本地 SQLite，同步 API |
 | 凭据存储 | keytar (跨平台密钥链) | 支持 Windows/macOS/Linux |

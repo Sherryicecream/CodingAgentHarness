@@ -16,13 +16,6 @@ interface Session {
   }>;
 }
 
-const statusColors: Record<string, string> = {
-  running: '#2196f3',
-  blocked: '#ff9800',
-  completed: '#4caf50',
-  failed: '#f44336',
-};
-
 export function SessionHistory() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
@@ -42,14 +35,16 @@ export function SessionHistory() {
       });
   }, []);
 
-  if (loading) return <div style={{ padding: 20, color: '#666' }}>Loading sessions...</div>;
-  if (error) return <div style={{ padding: 20, color: '#f44336' }}>Error: {error}</div>;
-  if (sessions.length === 0) return <div style={{ padding: 20, color: '#999' }}>No sessions yet. Run a task from the Chat tab first.</div>;
+  if (loading) return <div className="loading-text">Loading sessions...</div>;
+  if (error) return <div className="event-error">Error: {error}</div>;
+  if (sessions.length === 0) {
+    return <div className="empty-text">No sessions yet. Run a task from the Chat tab first.</div>;
+  }
 
   return (
     <div>
-      <h2 style={{ marginBottom: 16 }}>Session History</h2>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <h2 className="section-title">Session History</h2>
+      <div className="session-history">
         {sessions.map(session => {
           const isExpanded = expandedId === session.id;
           const createdAt = new Date(session.createdAt);
@@ -58,47 +53,31 @@ export function SessionHistory() {
           return (
             <div
               key={session.id}
-              style={{
-                border: '1px solid #ddd',
-                borderRadius: 6,
-                padding: 12,
-                background: '#fff',
-                cursor: 'pointer',
-              }}
+              className="session-card"
               onClick={() => setExpandedId(isExpanded ? null : session.id)}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>{session.task}</div>
-                  <div style={{ fontSize: 12, color: '#888' }}>{timeStr}</div>
+              <div className="session-header">
+                <div>
+                  <div className="session-task">{session.task}</div>
+                  <div className="session-time">{timeStr}</div>
                 </div>
-                <span style={{
-                  background: statusColors[session.status] || '#999',
-                  color: 'white',
-                  padding: '2px 8px',
-                  borderRadius: 3,
-                  fontSize: 12,
-                  fontWeight: 600,
-                  marginLeft: 12,
-                  whiteSpace: 'nowrap',
-                }}>
+                <span className={`badge badge-${session.status}`}>
                   {session.status}
                 </span>
               </div>
 
               {session.conclusion && (
-                <div style={{ fontSize: 13, color: '#555', marginBottom: 4 }}>
-                  {session.conclusion}
-                </div>
+                <div className="session-conclusion">{session.conclusion}</div>
               )}
 
-              <div style={{ fontSize: 12, color: '#999' }}>
-                {session.feedbackRuns?.length || 0} feedback iteration(s) —{' '}
+              <div className="session-meta">
+                {session.feedbackRuns?.length || 0} feedback iteration(s)
+                {' — '}
                 {isExpanded ? 'Click to collapse' : 'Click to expand'}
               </div>
 
               {isExpanded && (
-                <div style={{ marginTop: 8, borderTop: '1px solid #eee', paddingTop: 8 }}>
+                <div className="session-expanded">
                   <FeedbackTimeline runs={session.feedbackRuns || []} />
                 </div>
               )}
