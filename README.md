@@ -61,6 +61,28 @@ cd packages/cli && npm run build && npm start
 # Or: npx harness
 ```
 
+### Using Docker
+
+```bash
+# Build the image
+docker build -t harness .
+
+# Run the container
+docker run -d -p 3000:3000 -e DEEPSEEK_API_KEY=your_key_here harness
+
+# Open http://localhost:3000
+```
+
+### npm Packages (Global Install)
+
+```bash
+# Install the CLI globally
+npm install -g @harness/cli
+
+# Start the harness
+harness
+```
+
 ---
 
 ## Key Features
@@ -224,19 +246,52 @@ The API key is never:
 
 ## Deployment
 
-### Render (Recommended)
+### Docker (Recommended for Cloud)
+
+```bash
+# Build and run
+docker build -t harness .
+docker run -d -p 3000:3000 \
+  -e DEEPSEEK_API_KEY=your_key_here \
+  -e NODE_ENV=production \
+  harness
+```
+
+### Docker Compose (with auto-restart)
+
+```yaml
+version: '3'
+services:
+  harness:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - DEEPSEEK_API_KEY=your_key_here
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+```
+
+### Alibaba Cloud (ECS)
+
+1. SSH into your ECS instance
+2. Install Docker: `curl -fsSL https://get.docker.com | sh`
+3. Clone or upload the project
+4. `docker build -t harness . && docker run -d -p 3000:3000 -e DEEPSEEK_API_KEY=xxx harness`
+5. Configure security group: allow inbound on port 3000
+6. (Optional) Set up Nginx reverse proxy + domain
+
+### Render (Alternative)
 
 1. Connect your GitHub repository to [Render](https://render.com)
 2. Render auto-detects `render.yaml` in the repo root
 3. Set the `DEEPSEEK_API_KEY` environment variable in Render Dashboard
 4. Deploy -- the app will be available at `https://harness.onrender.com`
-
-### Manual
-
-```bash
-npm install && npm run build
-cd packages/server && NODE_ENV=production npm start
-```
 
 ---
 

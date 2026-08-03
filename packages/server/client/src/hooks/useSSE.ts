@@ -19,6 +19,9 @@ export function useSSE(sessionId: string | null) {
   useEffect(() => {
     if (!sessionId) return;
 
+    setEvents([]);
+    setError(null);
+
     // Connect to SSE FIRST, before any events are emitted
     const es = new EventSource(`/api/agent/stream/${sessionId}`);
     eventSourceRef.current = es;
@@ -30,6 +33,10 @@ export function useSSE(sessionId: string | null) {
     es.onmessage = (event) => {
       const parsed = JSON.parse(event.data);
       setEvents(prev => [...prev, parsed]);
+      // If it's an error event, also set the error state
+      if (parsed.type === 'error') {
+        setError(parsed.data?.message || 'An error occurred');
+      }
       if (parsed.type === 'complete') {
         es.close();
         setIsConnected(false);
@@ -39,7 +46,6 @@ export function useSSE(sessionId: string | null) {
     es.onerror = () => {
       // EventSource auto-reconnects, only show error after multiple failures
       if (es.readyState === EventSource.CLOSED) {
-        setError('Connection lost');
         setIsConnected(false);
       }
     };

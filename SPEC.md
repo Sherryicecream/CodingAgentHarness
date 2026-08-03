@@ -320,14 +320,15 @@ interface MemoryEntry {
 
 | 项目 | 决策 |
 |------|------|
-| **主形态** | 线上部署（Render），浏览器打开即用 |
+| **主形态** | 阿里云 ECS 部署（Docker 容器化），浏览器打开即用；备选 Render 免费版 |
 | **辅助形态** | npm 包 `@harness/cli`（本地运行） |
 | 包结构 | `@harness/core` + `@harness/server` + `@harness/cli` |
-| 线上 URL | `https://harness.onrender.com`（Render 免费额度 750h/月） |
+| 线上 URL | `https://harness.onrender.com`（Render 备选）或阿里云 ECS 公网 IP |
 | 本地安装 | `npm install -g @harness/cli` |
 | 本地运行 | `harness`（启动本地服务器 + 打开浏览器） |
 | 平台 | Node.js 18+，Windows / macOS / Linux |
-| 已知限制 | Render 免费版 15 分钟无请求休眠，唤醒需 30-50 秒；本地凭据使用系统密钥链 |
+| 容器运行 | `docker build -t harness . && docker run -d -p 3000:3000 -e DEEPSEEK_API_KEY=xxx harness` |
+| 已知限制 | Render 免费版 15 分钟无请求休眠，唤醒需 30-50 秒；阿里云 ECS 需自行配置安全组和域名；凭据使用加密文件存储或环境变量 |
 
 ---
 
@@ -370,10 +371,11 @@ interface MemoryEntry {
 | 设计系统 | Open Design | 使用 Open Design 方法论定义 DESIGN.md，含完整的颜色/字体/间距/组件规范 |
 | CLI 框架 | 轻量封装 | 复用 core，不引入重量级 CLI 框架 |
 | 数据库 | better-sqlite3 | 零配置本地 SQLite，同步 API |
-| 凭据存储 | keytar (跨平台密钥链) | 支持 Windows/macOS/Linux |
+| 凭据存储 | 加密文件 (AES-256-GCM) | 跨平台，无需原生编译，支持环境变量覆盖 |
 | 测试框架 | Vitest | 快，TypeScript 原生支持 |
 | 打包 | tsup | 轻量 TypeScript 打包 |
-| 部署 | Render (免费) | 750h/月，支持长驻进程，无硬超时，兼容 agent 长循环 |
+| 部署 | 阿里云 ECS (Docker) | 国内可访问，弹性计算，按量付费 |
+| 备选部署 | Render (免费) | 海外节点，750h/月免费额度 |
 | CI | GitHub Actions | 仓库在 GitHub，使用 `.github/workflows/ci.yml` |
 | monorepo | npm workspaces | 原生支持，无需额外工具 |
 
@@ -389,7 +391,7 @@ interface MemoryEntry {
 | 工具系统 | 所有工具可注册、可执行、参数校验正确 |
 | 记忆 | 跨会话可读写记忆，按项目隔离 |
 | CLI | `harness` 启动本地服务，浏览器可访问 |
-| Web 线上部署 | Vercel 部署，公网 URL 可访问，功能完整 |
+| Web 线上部署 | Render 部署，公网 URL 可访问，功能完整 |
 | 凭据 | 首次运行引导配置，key 不入源码、不入 Git、不入日志 |
 | 分发 | `npm install -g` 后可运行 |
 | Mock 测试 | 所有核心机制有 mock LLM 驱动的确定性单元测试 |
@@ -408,4 +410,4 @@ interface MemoryEntry {
 | SSE 实时推送在 Render 下可用 | Render 支持长连接（Web Service），非 Serverless，没问题 |
 | Render 免费版 15 分钟休眠 | 休眠后自动唤醒（30-50s），接受此限制；或用 cron job 定时唤醒 |
 | Windows Credential Manager 兼容性 | 使用 keytar 库跨平台抽象，非 Windows 平台 fallback 到加密文件 |
-| 线上版 API Key 存储安全 | Vercel 环境变量加密存储，传输层 HTTPS，不落盘 |
+| 线上版 API Key 存储安全 | Render 环境变量加密存储，传输层 HTTPS，不落盘 |

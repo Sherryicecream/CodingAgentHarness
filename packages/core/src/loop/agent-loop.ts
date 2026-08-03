@@ -1,4 +1,4 @@
-import { AgentContext, AgentLoopResult, AgentResponse, Message, Session, ToolCallRecord, FeedbackRun } from '../types.js';
+import { AgentContext, AgentLoopResult, AgentResponse, Message, Session, ToolCallRecord, FeedbackRun, FeedbackResult } from '../types.js';
 import { LLMAdapter } from '../llm/adapter.js';
 import { ToolRegistry } from '../tools/tool.js';
 import { GovernanceService } from '../guardrail/index.js';
@@ -15,12 +15,26 @@ export interface AgentLoopDependencies {
   contextBuilder: ContextBuilder;
   stopCondition: StopCondition;
   config: { maxIterations: number };
+  /** Optional callback for real-time progress events */
+  onEvent?: (type: string, data: any) => void;
 }
 
 export interface AgentLoop {
   run(task: string, workingDir: string): Promise<AgentLoopResult>;
   handleApproval(approved: boolean): void;
   abort(): void;
+}
+
+/**
+ * Check if a shell command looks like a test command.
+ */
+function isTestCommand(command: string): boolean {
+  const lower = command.toLowerCase();
+  // Match: node *test*, npx test, npm test, vitest, jest, *test.js, *test.ts, *spec.js, *spec.ts
+  return /\b(test|assert|spec)\b/.test(lower)
+    || /node\s+.*\.test\.(js|ts|mjs)/.test(lower)
+    || /node\s+.*\.spec\.(js|ts|mjs)/.test(lower)
+    || /^(npx|npm)\s+(test|vitest|jest|run test)/.test(lower);
 }
 
 export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
@@ -43,15 +57,21 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
         });
 
         // 2. Call LLM
+        deps.onEvent?.('loop_step', { iteration, phase: 'calling_llm' });
         const response: AgentResponse = await deps.llm.sendMessage(context);
         const parsed = parseResponse(response);
-        messages.push({ role: 'assistant', content: response.content });
+        deps.onEvent?.('loop_step', { iteration, content: response.content?.slice(0, 300) });
+        messages.push({
+          role: 'assistant' as const,
+          content: response.content,
+          ...(response.toolCalls.length > 0 ? { toolCalls: response.toolCalls } : {}),
+        });
 
         // 3. Execute tool calls
         for (const tc of response.toolCalls) {
           // Pre-check (guardrail)
           if (!deps.governance.preCheck(tc)) {
-            // Blocked — wait for user approval
+            deps.onEvent?.('guardrail', { toolCall: tc, decision: 'blocked' });
             return { status: 'blocked', session: buildSession() };
           }
 
@@ -59,10 +79,12 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
           const startTime = Date.now();
           let result;
           try {
+            deps.onEvent?.('tool_call', { name: tc.name, arguments: tc.arguments, status: 'running' });
             result = await deps.tools.execute(tc.name, tc.arguments);
           } catch (err: any) {
             result = { success: false, output: '', error: err.message };
           }
+          deps.onEvent?.('tool_call', { name: tc.name, arguments: tc.arguments, result, status: 'done' });
 
           toolCalls.push({
             timestamp: new Date(),
@@ -80,8 +102,23 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
           });
 
           // 4. If tests were run, trigger feedback loop
-          if (tc.name === 'run_tests') {
-            const fbResult = await deps.feedback.run(workingDir, feedbackState);
+          // Trigger on both `run_tests` tool and `execute_shell` with test commands
+          const isTestRun = tc.name === 'run_tests'
+            || (tc.name === 'execute_shell' && isTestCommand(String(tc.arguments?.command || '')));
+
+          if (isTestRun) {
+            let fbResult: FeedbackResult;
+            if (tc.name === 'run_tests') {
+              fbResult = await deps.feedback.run(workingDir, feedbackState);
+            } else {
+              // For execute_shell test commands, parse the output directly
+              fbResult = deps.feedback.parseOutput(
+                result?.output || '',
+                result?.error || '',
+                result?.success !== false ? 0 : 1,
+              );
+            }
+
             const fbRun: FeedbackRun = {
               iteration,
               testResult: fbResult.status === 'pass' ? 'pass' : 'fail',
@@ -90,6 +127,7 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
               timeSpent: Date.now() - startTime,
             };
             feedbackRuns.push(fbRun);
+            deps.onEvent?.('feedback', { status: fbResult.status, failures: fbResult.failures, iteration });
 
             if (fbResult.status === 'pass') {
               testPassed = true;

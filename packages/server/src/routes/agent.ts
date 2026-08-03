@@ -10,6 +10,7 @@ import {
   type AgentLoop,
 } from '@harness/core';
 import { createSSEManager, type SSEManager, type SSEEvent } from '../sse/sse-manager.js';
+import { createCredentialStore } from '../credential-store.js';
 
 export const agentRouter = Router();
 
@@ -17,8 +18,9 @@ export const agentRouter = Router();
 const sseManager: SSEManager = createSSEManager();
 const sessionStore = createSessionStore('.harness-sessions');
 const activeLoops = new Map<string, AgentLoop>();
+const credentialStore = createCredentialStore();
 
-function buildAgentLoop(workingDir: string): AgentLoop {
+function buildAgentLoop(workingDir: string, sessionId?: string): AgentLoop {
   const tools = createToolRegistry();
   tools.register(createReadFileTool(workingDir));
   tools.register(createWriteFileTool(workingDir));
@@ -38,8 +40,9 @@ function buildAgentLoop(workingDir: string): AgentLoop {
   const contextBuilder = createContextBuilder();
   const stopCondition = createStopCondition();
 
-  // Use real LLM if API key is configured, otherwise fall back to mock
-  const apiKey = process.env.DEEPSEEK_API_KEY;
+  // Check credential store first, then environment variable
+  const storedKey = credentialStore.getKey('harness/deepseek-api-key');
+  const apiKey = storedKey || process.env.DEEPSEEK_API_KEY || '';
   const baseUrl = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com';
 
   const llm = apiKey
@@ -63,6 +66,7 @@ function buildAgentLoop(workingDir: string): AgentLoop {
     contextBuilder,
     stopCondition,
     config: { maxIterations: 10 },
+    onEvent: sessionId ? (type, data) => emit(sessionId, type as any, data) : undefined,
   });
 }
 
@@ -79,7 +83,7 @@ agentRouter.post('/run', async (req: Request, res: Response) => {
       return;
     }
 
-    const agentLoop = buildAgentLoop(workingDir);
+    const agentLoop = buildAgentLoop(workingDir, sessionId);
     activeLoops.set(sessionId, agentLoop);
 
     emit(sessionId, 'loop_step', { phase: 'starting', task });
@@ -96,7 +100,10 @@ agentRouter.post('/run', async (req: Request, res: Response) => {
         sseManager.close(sessionId);
       }
     }).catch((err: Error) => {
-      emit(sessionId, 'error', { message: err.message });
+      const message = err.name === 'LLMCallError'
+        ? `${err.message}`
+        : err.message;
+      emit(sessionId, 'error', { message });
       activeLoops.delete(sessionId);
       sseManager.close(sessionId);
     });
@@ -121,6 +128,41 @@ agentRouter.get('/stream/:sessionId', (req: Request, res: Response) => {
     clearInterval(keepAlive);
     sseManager.close(sessionId);
   });
+});
+
+// POST /api/agent/test-key — Test if the API key is valid
+agentRouter.post('/test-key', async (_req: Request, res: Response) => {
+  try {
+    const storedKey = credentialStore.getKey('harness/deepseek-api-key');
+    const apiKey = storedKey || process.env.DEEPSEEK_API_KEY;
+    if (!apiKey) {
+      res.json({ valid: false, error: 'No API key configured' });
+      return;
+    }
+
+    const baseUrl = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com';
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [{ role: 'user', content: 'Hello' }],
+        max_tokens: 5,
+      }),
+    });
+
+    if (response.ok) {
+      res.json({ valid: true });
+    } else {
+      const text = await response.text();
+      res.json({ valid: false, error: `API returned ${response.status}: ${text}` });
+    }
+  } catch (err: any) {
+    res.json({ valid: false, error: `Connection failed: ${err.message}` });
+  }
 });
 
 // POST /api/agent/approve — Approve HITL blocked action

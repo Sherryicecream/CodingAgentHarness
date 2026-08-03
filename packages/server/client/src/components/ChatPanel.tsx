@@ -26,7 +26,7 @@ export function ChatPanel() {
       const res = await fetch('/api/agent/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task, workingDir: '/tmp', sessionId: sid }),
+        body: JSON.stringify({ task, workingDir: '/tmp/harness-workspace', sessionId: sid }),
       });
 
       if (!res.ok) {
@@ -97,6 +97,16 @@ export function ChatPanel() {
             return (
               <div key={i} className="event-message">
                 <strong>Step {e.data.iteration || ''}:</strong> {e.data.content || e.data.phase}
+              </div>
+            );
+          }
+          if (e.type === 'error') {
+            return (
+              <div key={i} className="event-error">
+                <strong>Error:</strong> {e.data?.message || 'Unknown error'}
+                <div style={{ fontSize: 12, marginTop: 4, color: 'var(--color-text-muted)' }}>
+                  The agent encountered an error. Check that your API key is valid and the DeepSeek API is accessible.
+                </div>
               </div>
             );
           }

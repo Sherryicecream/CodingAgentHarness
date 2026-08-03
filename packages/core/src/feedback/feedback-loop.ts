@@ -6,6 +6,8 @@ import { FixSuggestionBuilder } from './fix-suggestion.js';
 
 export interface FeedbackLoop {
   run(workingDir: string, state: FeedbackState | null): Promise<FeedbackResult>;
+  /** Parse raw test output (for execute_shell test commands) */
+  parseOutput(stdout: string, stderr: string, exitCode: number): FeedbackResult;
   shouldContinue(result: FeedbackResult, state: FeedbackState | null, maxIterations: number): boolean;
 }
 
@@ -35,6 +37,19 @@ export function createFeedbackLoop(
 
       return {
         status: passed ? 'pass' : 'fail',
+        failures,
+        actionableFix,
+      };
+    },
+
+    parseOutput(stdout: string, stderr: string, exitCode: number): FeedbackResult {
+      const failures = resultParser.parse(stdout, stderr, exitCode);
+      const classified = failureClassifier.classify(failures);
+      const actionableFix = classified.length > 0
+        ? fixSuggestionBuilder.build(classified)
+        : null;
+      return {
+        status: resultParser.isPassed(exitCode) ? 'pass' : 'fail',
         failures,
         actionableFix,
       };
