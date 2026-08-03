@@ -57,6 +57,14 @@ Agent = LLM + Harness。LLM 只负责"决定下一步做什么"，而 harness �
 9. 若未停机 → 回到第 1 步（携带反馈状态）
 ```
 
+**上下文生命周期**：
+- `AgentContext` **每轮循环重新创建**，由 `ContextBuilder.build()` 构建
+- `messages` 包含**截止当前轮次的所有历史消息**（累积增长）
+- `feedbackState` 由 `AgentLoop` 维护，上一轮反馈闭环的结果写入 `feedbackState.lastResult`，轮次计数写入 `feedbackState.iteration`
+- `memory` 由 `MemoryStore` 在循环外管理，每轮构建上下文时查询并注入
+- `config` 在 AgentLoop 启动时加载一次，循环内不变
+```
+
 **六大维度如何映射到扩展点**：
 
 | 维度 | 对应扩展点 | 注入方式 |
@@ -70,6 +78,13 @@ Agent = LLM + Harness。LLM 只负责"决定下一步做什么"，而 harness �
 
 **扩展点**（协作/多 agent）预留但不深入实现：
 - `AgentLoop` 可被包装为 `Tool`，从而支持多 agent 编排（子 agent 作为工具调用）
+
+**Message 类型与 OpenAI 格式映射**：
+- `role: "system"` → OpenAI `role: "system"`，content 为系统提示
+- `role: "user"` → OpenAI `role: "user"`，content 为任务描述
+- `role: "assistant"` → OpenAI `role: "assistant"`，若含 toolCalls，额外映射 `tool_calls` 字段
+- `role: "tool"` → OpenAI `role: "tool"`，需携带 `tool_call_id` 对应某次 tool call 的 id
+- `name` 字段映射为 OpenAI 的 `name`（用于工具消息标识工具名）
 
 - **输入**：用户自然语言任务描述
 - **行为**：组织上下文 → 护栏预检 → 调用 LLM → 解析动作 → 工具分发 → 反馈回灌 → 停机判断

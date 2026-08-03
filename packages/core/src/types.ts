@@ -18,6 +18,20 @@ export interface AgentContext {
 export interface AgentResponse {
   content: string;
   toolCalls: ToolCallRequest[];
+  /** LLM 返回的原始文本（用于调试/日志） */
+  rawContent?: string;
+  /** 供应商返回的响应 ID */
+  responseId?: string;
+  /** 模型名称，如 "deepseek-chat" */
+  model?: string;
+  /** 延迟（ms） */
+  latencyMs?: number;
+  /** Token 使用情况 */
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
 }
 
 export interface ToolCallRequest {
