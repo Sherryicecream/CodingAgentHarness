@@ -35,7 +35,7 @@ export function useSSE(sessionId: string | null) {
       setEvents(prev => [...prev, parsed]);
       // If it's an error event, also set the error state
       if (parsed.type === 'error') {
-        setError(parsed.data?.message || 'An error occurred');
+        setError(parsed.data?.message || '发生了一个错误');
       }
       if (parsed.type === 'complete') {
         es.close();

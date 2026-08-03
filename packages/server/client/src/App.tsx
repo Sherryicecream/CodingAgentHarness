@@ -19,19 +19,19 @@ export function App() {
             className={`nav-tab ${view === 'chat' ? 'active' : ''}`}
             onClick={() => setView('chat')}
           >
-            Chat
+            对话
           </button>
           <button
             className={`nav-tab ${view === 'history' ? 'active' : ''}`}
             onClick={() => setView('history')}
           >
-            History
+            历史
           </button>
           <button
             className={`nav-tab ${view === 'config' ? 'active' : ''}`}
             onClick={() => setView('config')}
           >
-            Config
+            配置
           </button>
         </nav>
       </header>

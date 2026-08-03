@@ -13,22 +13,28 @@ export function GuardrailDialog({ data, sessionId }: { data: any; sessionId: str
   };
 
   if (handled) {
-    return <div className="guardrail-handled">Action handled.</div>;
+    return <div className="guardrail-handled">操作已处理。</div>;
   }
+
+  const toolName = data.toolCall?.name || '';
+  const toolArgs = data.toolCall?.arguments || {};
 
   return (
     <div className="guardrail-dialog">
-      <h3 className="guardrail-title">⚠️ Dangerous Action Detected</h3>
-      <div className="guardrail-command">{data.command}</div>
+      <h3 className="guardrail-title">⚠️ 检测到危险操作</h3>
+      <div className="guardrail-command">
+        <strong>工具：</strong>{toolName}<br />
+        <strong>参数：</strong>{JSON.stringify(toolArgs)}
+      </div>
       <p className="guardrail-description">
-        This action requires your approval to proceed. Review the command above and decide.
+        此操作需要你的批准才能继续。请确认是否允许执行。
       </p>
       <div className="guardrail-actions">
         <button className="btn btn-danger" onClick={() => handleAction('approve')}>
-          Approve
+          批准
         </button>
         <button className="btn btn-secondary" onClick={() => handleAction('reject')}>
-          Reject
+          拒绝
         </button>
       </div>
     </div>
