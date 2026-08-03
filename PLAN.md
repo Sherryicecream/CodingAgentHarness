@@ -2143,40 +2143,29 @@ node dist/cli.js  # 启动，浏览器自动打开
 
 ---
 
-### Task 55: Render 部署配置
+### Task 55: 阿里云 ECS 部署配置
 
 **Files:**
-- Create: `render.yaml` (根目录)
-- Create: `packages/server/package.json` (添加 start script)
+- Create: `Dockerfile` (根目录)
+- Modify: `README.md` (添加部署说明)
 
-**Goal:** 配置 Render 自动部署。Render 连接 GitHub 仓库后自动检测此文件。
+**Goal:** 配置 Docker 容器化部署，适配阿里云 ECS 环境。
 
-**render.yaml:**
-```yaml
-services:
-  - type: web
-    name: harness
-    runtime: node
-    plan: free
-    buildCommand: npm install && npm run build
-    startCommand: cd packages/server && npm start
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: DEEPSEEK_API_KEY
-        sync: false  # 手动在 Render Dashboard 设置
-```
+**Dockerfile 关键设计:**
+- 多阶段构建：deps → build → production
+- 基于 Node.js 22 Alpine
+- 暴露 3000 端口
+- HEALTHCHECK 通过 `/api/health` 端点
 
 **Deployment steps:**
-1. Render Dashboard → New Web Service → Connect GitHub repo
-2. Render 自动检测 `render.yaml` 或手动配置
-3. 设置环境变量 `DEEPSEEK_API_KEY`
-4. 部署 → 获得 `https://harness.onrender.com`
+1. 阿里云控制台 → 创建 ECS 实例（推荐 2vCPU 2GB 经济型 e）
+2. 安全组 → 入方向开放 3000 端口
+3. 远程桌面登录 → 安装 Node.js 22+ → 拉取代码 → `npm install && npm run build` → 启动
+4. 浏览器访问 `http://<公网IP>:3000`
 
 **Verification:**
 ```bash
-# 部署完成后
-curl https://harness.onrender.com/api/sessions  # 返回 []
+curl http://<公网IP>:3000/api/health  # 返回 {"status":"ok"}
 ```
 
 ---
@@ -2225,13 +2214,13 @@ harness config clear   # 清除 key
 
 1. **项目简介** — 一句话 + 核心价值
 2. **安装** — `npm install -g @harness/cli` 或 线上版 URL
-3. **运行** — `harness` 或浏览器打开 `https://harness.onrender.com`
-4. **分发命令** — npm publish / Render 部署步骤
+3. **运行** — `harness` 或浏览器打开 `http://<公网IP>:3000`
+4. **分发命令** — npm publish / Docker 部署步骤
 5. **目录结构** — monorepo 包结构图
 6. **安全边界说明** — 凭据存储方式、威胁模型、已知限制
-7. **技术栈** — TypeScript, Express, React, DeepSeek, Render
-8. **部署架构** — GitHub → Render 自动部署，CI/CD 流程
-9. **已知限制** — Render 休眠、仅支持 Jest/Vitest 解析、Windows 凭据存储
+7. **技术栈** — TypeScript, Express, React, DeepSeek, 阿里云 ECS
+8. **部署架构** — GitHub → 阿里云 ECS，手动部署流程
+9. **已知限制** — Windows 凭据存储、仅支持 Jest/Vitest 解析
 
 **Verification:**
 ```bash
@@ -2368,7 +2357,7 @@ cd packages/core && npm pack --dry-run  # 应显示打包内容
 | Task | Commit | Status |
 |------|--------|--------|
 | Task 54: CLI 初始化 | `ddacaa6` | ✅ |
-| Task 55: Render 部署配置 | `ddacaa6` | ✅ |
+| Task 55: 阿里云 ECS 部署配置 | `ddacaa6` + `fdb4e2e` | ✅ |
 | Task 56: 凭据管理 | `ddacaa6` + Phase 1 重写 | ✅ |
 | Task 57: README.md | `ddacaa6` | ✅ |
 | Task 58: AGENT_LOG.md | `ddacaa6` | ✅ |
