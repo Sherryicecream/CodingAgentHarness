@@ -279,19 +279,13 @@ services:
 
 ### Alibaba Cloud (ECS)
 
-1. SSH into your ECS instance
-2. Install Docker: `curl -fsSL https://get.docker.com | sh`
-3. Clone or upload the project
-4. `docker build -t harness . && docker run -d -p 3000:3000 -e DEEPSEEK_API_KEY=xxx harness`
-5. Configure security group: allow inbound on port 3000
-6. (Optional) Set up Nginx reverse proxy + domain
-
-### Render (Alternative)
-
-1. Connect your GitHub repository to [Render](https://render.com)
-2. Render auto-detects `render.yaml` in the repo root
-3. Set the `DEEPSEEK_API_KEY` environment variable in Render Dashboard
-4. Deploy -- the app will be available at `https://harness.onrender.com`
+1. RDP into your Windows ECS instance
+2. Install Node.js 22+ from `https://nodejs.org`
+3. `git clone https://github.com/Sherryicecream/CodingAgentHarness.git`
+4. `cd CodingAgentHarness && npm install && npm run build`
+5. `cd packages/server && NODE_ENV=production npm start`
+6. Configure security group: allow inbound on port 3000
+7. Visit `http://<your-ip>:3000`
 
 ---
 
@@ -307,15 +301,15 @@ services:
 | Database | SQLite (via sql.js) |
 | Test Framework | Vitest |
 | Build | tsup |
-| Deployment | Render |
+| Deployment | Alibaba Cloud ECS (Docker) |
 | Monorepo | npm workspaces |
 
 ---
 
 ## Known Limitations
 
-1. **Render Free Tier Sleep**: The free tier puts the server to sleep after 15 minutes of inactivity. First request after sleep takes ~30 seconds to wake.
-2. **Localhost-Only Web**: The web interface is designed for local use. Remote deployment requires additional authentication.
+1. **Windows Server Deployment**: The project was developed for Unix-like environments. On Windows Server, ensure Node.js 22+ is installed and the Vite frontend build succeeds. The `npm run build` command handles both backend and frontend.
+2. **Localhost-Only Web**: The web interface is designed for local use. Remote deployment requires security group configuration.
 3. **Test Parser Scope**: The feedback loop's ResultParser supports Jest and Vitest output formats. Other test frameworks (pytest, go test) require custom plugins.
 4. **Single-User**: The harness is designed for single-user, single-project use. No multi-tenancy or concurrent session isolation.
 5. **Windows Paths**: Some shell commands assume Unix-style paths. On Windows, use Git Bash or WSL for full compatibility.
