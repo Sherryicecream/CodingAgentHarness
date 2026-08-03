@@ -6,6 +6,10 @@ export interface SSEEvent {
   timestamp: string;
 }
 
+export function generateSessionId(): string {
+  return `session_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+}
+
 export function useSSE(sessionId: string | null) {
   const [events, setEvents] = useState<SSEEvent[]>([]);
   const [isConnected, setIsConnected] = useState(false);
@@ -15,9 +19,13 @@ export function useSSE(sessionId: string | null) {
   useEffect(() => {
     if (!sessionId) return;
 
+    // Connect to SSE FIRST, before any events are emitted
     const es = new EventSource(`/api/agent/stream/${sessionId}`);
     eventSourceRef.current = es;
-    setIsConnected(true);
+
+    es.onopen = () => {
+      setIsConnected(true);
+    };
 
     es.onmessage = (event) => {
       const parsed = JSON.parse(event.data);
@@ -29,11 +37,17 @@ export function useSSE(sessionId: string | null) {
     };
 
     es.onerror = () => {
-      setError('Connection lost');
-      setIsConnected(false);
+      // EventSource auto-reconnects, only show error after multiple failures
+      if (es.readyState === EventSource.CLOSED) {
+        setError('Connection lost');
+        setIsConnected(false);
+      }
     };
 
-    return () => { es.close(); };
+    return () => {
+      es.close();
+      setIsConnected(false);
+    };
   }, [sessionId]);
 
   return { events, isConnected, error };

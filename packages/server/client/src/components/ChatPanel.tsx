@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { useSSE } from '../hooks/useSSE.js';
+import { useSSE, generateSessionId } from '../hooks/useSSE.js';
 import { ToolCallCard } from './ToolCallCard.js';
 import { GuardrailDialog } from './GuardrailDialog.js';
+import { FeedbackTimeline } from './FeedbackTimeline.js';
 
 export function ChatPanel() {
   const [task, setTask] = useState('');
@@ -12,18 +13,35 @@ export function ChatPanel() {
   const handleSubmit = async () => {
     if (!task.trim()) return;
     setRunning(true);
+
+    // Generate sessionId and connect SSE FIRST
+    const sid = generateSessionId();
+    setSessionId(sid);
+
+    // Small delay to ensure EventSource connection is established
+    await new Promise(r => setTimeout(r, 100));
+
+    // Then POST to run the agent
     try {
       const res = await fetch('/api/agent/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task, workingDir: '/tmp' }),
+        body: JSON.stringify({ task, workingDir: '/tmp', sessionId: sid }),
       });
-      const data = await res.json();
-      setSessionId(data.sessionId);
+
+      if (!res.ok) {
+        setRunning(false);
+      }
     } catch {
       setRunning(false);
     }
   };
+
+  const lastEvent = events[events.length - 1];
+  const isComplete = lastEvent?.type === 'complete';
+  const feedbackRuns = events
+    .filter(e => e.type === 'feedback')
+    .map(e => e.data);
 
   return (
     <div className="chat-panel">
@@ -45,7 +63,7 @@ export function ChatPanel() {
         </button>
       </div>
 
-      {isConnected && (
+      {isConnected && !isComplete && (
         <div style={{ fontSize: 12, color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
           <span className="status-dot status-dot-pass"></span>
           Connected — agent is working
@@ -75,10 +93,17 @@ export function ChatPanel() {
               </div>
             );
           }
+          if (e.type === 'loop_step') {
+            return (
+              <div key={i} className="event-message">
+                <strong>Step {e.data.iteration || ''}:</strong> {e.data.content || e.data.phase}
+              </div>
+            );
+          }
           if (e.type === 'complete') {
             return (
               <div key={i} className="event-complete">
-                ✅ Task completed
+                ✅ Task {e.data.status}
               </div>
             );
           }
@@ -89,6 +114,18 @@ export function ChatPanel() {
           );
         })}
       </div>
+
+      {isComplete && feedbackRuns.length > 0 && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <FeedbackTimeline runs={feedbackRuns.map((fb: any, idx: number) => ({
+            iteration: idx,
+            testResult: fb.status === 'pass' ? 'pass' as const : 'fail' as const,
+            failureCount: fb.failures?.length || 0,
+            fixApplied: false,
+            timeSpent: 0,
+          }))} />
+        </div>
+      )}
     </div>
   );
 }

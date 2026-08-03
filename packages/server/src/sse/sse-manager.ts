@@ -14,6 +14,7 @@ export interface SSEManager {
 
 export function createSSEManager(): SSEManager {
   const connections = new Map<string, Response>();
+  const buffers = new Map<string, SSEEvent[]>();
 
   return {
     createConnection(sessionId: string, res: Response) {
@@ -23,12 +24,24 @@ export function createSSEManager(): SSEManager {
         'Connection': 'keep-alive',
       });
       connections.set(sessionId, res);
+
+      // Flush buffered events
+      const buffer = buffers.get(sessionId) || [];
+      for (const event of buffer) {
+        res.write(`data: ${JSON.stringify({ ...event, timestamp: event.timestamp.toISOString() })}\n\n`);
+      }
+      buffers.delete(sessionId);
     },
 
     push(sessionId: string, event: SSEEvent) {
       const res = connections.get(sessionId);
       if (res) {
         res.write(`data: ${JSON.stringify({ ...event, timestamp: event.timestamp.toISOString() })}\n\n`);
+      } else {
+        // Buffer event until connection is established
+        const buffer = buffers.get(sessionId) || [];
+        buffer.push(event);
+        buffers.set(sessionId, buffer);
       }
     },
 
@@ -38,6 +51,7 @@ export function createSSEManager(): SSEManager {
         res.end();
         connections.delete(sessionId);
       }
+      buffers.delete(sessionId);
     },
   };
 }
