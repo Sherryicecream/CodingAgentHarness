@@ -45,6 +45,8 @@ export interface Message {
   content: string;
   toolCallId?: string;
   name?: string;
+  /** tool_calls from the assistant (required by OpenAI-compatible APIs when tool role messages follow) */
+  toolCalls?: ToolCallRequest[];
 }
 
 // ── Tool Layer ──

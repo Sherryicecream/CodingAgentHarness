@@ -578,3 +578,18 @@ body {
   margin-bottom: var(--space-4);
   color: var(--color-text);
 }
+
+/* Code inline */
+code {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  background: var(--color-surface-hover);
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+}
+
+/* List styles */
+ul {
+  list-style: disc;
+  padding-left: var(--space-5);
+}

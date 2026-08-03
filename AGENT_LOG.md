@@ -71,10 +71,16 @@
 - **Files created:** server.ts, routes/agent.ts, routes/session.ts, routes/config.ts, sse/sse-manager.ts, client/index.html, client/src/main.tsx, client/src/App.tsx, client/vite.config.ts, ChatPanel.tsx, ToolCallCard.tsx, GuardrailDialog.tsx, FeedbackTimeline.tsx, SessionHistory.tsx, useSSE.ts
 - **Status:** 10/10 tasks complete
 
-## 2026-07-25 — CLI + Docs (Phase 9)
-- **Tasks:** 54-62
-- **Skills:** subagent-driven-development
-- **Output:** CLI, README, SPEC_PROCESS, AGENT_LOG, render.yaml
-- **Key decisions:** CLI as thin server launcher, Render free tier for deployment, comprehensive documentation
-- **Files created:** cli.ts, render.yaml, README.md, SPEC_PROCESS.md, AGENT_LOG.md
-- **Status:** 9/9 tasks complete
+## 2026-08-03 — 收尾阶段（冷启动验证 + 凭据管理 + 分发 + 文档修补）
+- **Tasks:** 冷启动验证补做，Phase 1 重写（凭据管理），Phase 2（Docker/npm）
+- **Skills:** 无（人工审查与补做）
+- **Output:** Codex 完成 Tasks 6+7 冷启动验证，发现 8 个缺陷 | 加密文件凭据存储 | ConfigPage 前端配置页 | Dockerfile | npm publish 配置
+- **Key decisions:**
+  - 冷启动验证从 ChatGPT 对话改为 Codex 真实实现（30 分钟），发现 8 个缺陷 vs 初轮 3 个
+  - 凭据存储从 keytar 改为 AES-256-GCM 加密文件（跨平台，无需原生编译）
+  - 部署目标从 Render 改为阿里云 ECS（Docker 容器化）
+  - 前端新增 Config 标签页替代原有 placeholder
+- **Defects fixed:** SPEC.md Vercel→Render 矛盾修复 | PLAN.md Task 2/6 LLMAdapter 重复定义修复 | PLAN.md 依赖声明提前到 Phase 1 | 冷启动 prompt 修正
+- **Files created:** credential-store.ts, ConfigPage.tsx, Dockerfile, .dockerignore, cold-start-prompt.md, cold-start-recording-template.md
+- **Files modified:** config.ts, agent.ts, server.ts, App.tsx, styles.css, SPEC.md, PLAN.md, SPEC_PROCESS.md, README.md, packages/*/package.json
+- **Status:** 待定（阿里云部署未完成，REFLECTION.md 未填写）

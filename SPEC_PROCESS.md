@@ -129,53 +129,99 @@ The brainstorming phase (using the `superpowers:brainstorming` skill) produced s
 
 ## Cold Start Validation
 
+### 验证说明
+
+通用要求 §4.5 规定：正式实现前，用**一个与主开发智能体不同**的 agent，在**不向其提供你与主 agent 对话历史**的前提下，仅凭 `SPEC.md` + `PLAN.md` 尝试实现 1–2 个 task（约 1–2 小时），以此检验规约质量。
+
+本项目在全部实现完成后补做了此验证。验证分两轮：
+
+| 轮次 | Agent | 耗时 | 深度 | 产出 |
+|------|-------|------|------|------|
+| ① 初轮（实现后补做） | ChatGPT | 约 15 分钟 | 仅提问，未实际实现 | 发现 3 个缺陷，已修正 |
+| ② 正式验证（2026-08-03） | **Codex** | 约 30 分钟 | 完整实现 Task 6 + 7，测试通过 | 发现 8 个缺陷，详见下文 |
+
+> 初轮验证流于表面（仅对话，未真正实现），因此补做了正式验证。以下记录以正式验证（Codex）为主，合并初轮的有效发现。
+
+---
+
 ### Verification Info
 
 | Field | Value |
 |-------|-------|
-| **Agent** | ChatGPT |
+| **Agent** | Codex (GitHub Copilot) |
 | **Date** | 2026-08-03 |
-| **Selected task** | Task 6 (LLMAdapter interface) |
+| **Selected task** | Task 6 (LLMAdapter interface) + Task 7 (MockLLMAdapter) |
 | **Session** | Fresh conversation, no prior context or memory |
 | **Input** | SPEC.md + PLAN.md only |
 
-### Task 6 Attempt
+### Implementation Result
 
-The agent was asked to implement Task 6 (LLMAdapter interface) using only the SPEC and PLAN documents. It was instructed to stop at any point of uncertainty rather than guess.
+The agent was asked to implement Tasks 6 and 7 using only the SPEC and PLAN documents. It was instructed to stop at any point of uncertainty rather than guess.
 
-**Where the agent paused:**
+**TDD outcome:**
+- **Task 6 RED phase**: 1 type-check test failed (proving the interface module didn't exist)
+- **Task 7 RED phase**: 3 of 4 behavior tests failed, 1 passed (proving all specified behaviors were testable)
+- **GREEN phase**: All 5 tests passed across 2 test files
+- `tsc --noEmit`: Passed
+- **Code review**: READY / Approve, no Critical or Important issues
+- **Mutation check**: Error name assertion successfully captured regression
 
-1. **Type dependency question**: "Task 6 depends on Task 2 (types.ts). Do you expect each task to strictly depend on prior tasks, or should each task be independently runnable?"
+### Where the Agent Paused
 
-2. **Test approach question**: "Should interface tests use `tsc --noEmit` + Vitest, or just Vitest with `import type`?"
-
-3. **Import style question**: "Should all type imports use `import type` syntax?"
+| # | Pause Point | Question | Defect Exposed |
+|---|-------------|----------|----------------|
+| 1 | After examining workspace | "The prompt says `types.ts` already exists, but the workspace only has 4 markdown files. Please provide the missing project scaffolding and `types.ts`, or authorize me to create them." | Cold-start prompt falsely assumed existing codebase; no scaffolding described for Phase 1 tasks |
+| 2 | Task 6 RED phase | (Did not ask — was authorized to proceed) Used `tsc --noEmit` to verify type existence after discovering that Vitest alone cannot validate type-only imports | PLAN Task 6's Vitest-only test cannot prove a pure-type module exists |
 
 ### SPEC/PLAN Defects Exposed
 
-Three ambiguities were identified that the original author (Claude Code) and the human had not noticed — they were shared tacit knowledge between the primary developer agent and the spec writer:
-
 | # | Defect | Location | Severity | Resolution |
 |---|--------|----------|----------|------------|
-| 1 | **AgentContext lifecycle undefined** | SPEC §3.1 | Medium | Added: "每轮循环重新创建", messages "累积增长", feedbackState 由 AgentLoop 维护 |
-| 2 | **AgentResponse lacks debug fields** | types.ts, PLAN Task 2 | Low | Added optional fields: `rawContent`, `responseId`, `model`, `latencyMs`, `usage` |
-| 3 | **Message→OpenAI mapping missing** | SPEC §3.1 | Medium | Added explicit mapping table for system/user/assistant/tool roles |
+| 1 | **Cold-start prompt claimed existing `types.ts`** — only documents were provided | `cold-start-prompt.md` | **High** | Prompt updated to remove false assumption |
+| 2 | **Task 2 and Task 6 both define `LLMAdapter`** — two authoritative locations | `PLAN.md` Task 2 / Task 6 | **Medium** | Task 2 types.ts no longer defines LLMAdapter; delegated to llm/adapter.ts |
+| 3 | **Task 6 Vitest test cannot validate type-only interfaces** — Vitest erases type imports, passing even if `adapter.ts` doesn't exist | `PLAN.md` Task 6 Test | **High** | Verification command updated to `tsc --noEmit`; Vitest kept as runtime test only |
+| 4 | **`MockLLMExhaustedError` API undefined** — no definition file, export style, constructor params, or error message | `PLAN.md` Task 7 Behavior | **Medium** | Added: exported from `mock.ts`, extends `Error`, no-arg constructor, message `"MockLLMAdapter: no more responses"` |
+| 5 | **Response array ownership unclear** — `shift()` mutates caller's array | `PLAN.md` Task 7 Interface | **Medium** | Added: constructor shallow-copies the array; caller's array is never modified |
+| 6 | **TypeScript/Vitest dependencies declared too late** — Task 42 lists them, but Tasks 2, 3, 6, 7 already require compilation | `PLAN.md` Tasks 2-7 / Task 42 | **High** | Moved devDependencies declaration to Phase 1 (Task 1) |
+| 7 | **Render vs Vercel contradiction** — SPEC §3.7/§5 say Render, §10/§11 say Vercel | `SPEC.md` §10, §11 | **Medium** | Unified to Render throughout |
+| 8 | **PLAN header "278 tests passing" lacks evidence** — no source or context for the claim | `PLAN.md` header | **Medium** | Added "(current state as of 2026-08-03)" qualifier |
+
+### Merged with Initial Validation
+
+The initial (ChatGPT) validation found 3 defects, all of which were already fixed in commit `be10126`:
+
+| # | Defect | Status | Relation to Codex findings |
+|---|--------|--------|---------------------------|
+| AgentContext lifecycle undefined | Fixed in `be10126` | Not re-found by Codex — confirms fix is adequate |
+| AgentResponse lacks debug fields | Fixed in `be10126` | Not re-found by Codex — confirms fix is adequate |
+| Message→OpenAI mapping missing | Fixed in `be10126` | Not re-found by Codex — confirms fix is adequate |
+
+**Conclusion from merged findings:** The initial validation was useful but shallow — it identified 3 real issues but missed 8 others that only emerged when a fresh agent actually tried to implement code. This confirms §4.5's rationale: **仅提问不实现，会严重高估规约的清晰度。**
 
 ### Misinterpretations
 
-The agent's understanding of the architecture was consistent with the SPEC. No significant misinterpretations occurred. The agent correctly identified that:
-
-- The harness is a "bare orchestrator" with injected interfaces
-- The LLMAdapter is the single point of LLM contact
-- The interface is compile-time only, with no runtime behavior to test
+| Interpretation | Original Intent | Root Cause |
+|---------------|----------------|------------|
+| `types.ts` no longer defines `LLMAdapter`; `llm/adapter.ts` is the sole authority | `types.ts` should define all shared types; `llm/adapter.ts` re-exports | SPEC/PLAN ambiguity — two definitions without precedence rule |
+| Mock constructor copies input array | PLAN didn't specify ownership | SPEC/PLAN omission — array mutation behavior undefined |
+| Only materialize core workspace, skip server/cli | Cold-start should only cover Tasks 6/7 | Scope boundary unclear — Task 1 implies all three packages |
 
 ### Revisions Made
 
-Commit `be10126`:
-- `packages/core/src/types.ts`: AgentResponse gained 5 optional fields
-- `SPEC.md`: Added context lifecycle paragraph (§3.1) and Message→OpenAI mapping (§3.1)
-- `PLAN.md`: Updated AgentResponse definition to match types.ts
+Based on the validated findings, the following revisions were applied:
+
+| File | Revision | Commit |
+|------|----------|--------|
+| `SPEC.md` | Replaced "Vercel" with "Render" in §10 and §11; unified deployment target | Pending |
+| `PLAN.md` | Task 2: removed `LLMAdapter` interface (delegated to Task 6). Task 6: added `tsc --noEmit` to verification. Task 7: added `MockLLMExhaustedError` API spec, array copy semantics. Task 1: added devDependencies (TypeScript, Vitest). | Pending |
+| `cold-start-prompt.md` | Removed "existing `types.ts`" assumption, added scaffolding instructions | Pending |
 
 ### Assessment
 
-**SPEC quality: Good.** The agent was able to understand the architecture, identify the correct files, and write correct implementation code from the documents alone. The three defects found were real but minor — none required architectural changes. The SPEC was sufficiently precise for a new agent to begin implementation without major confusion.
+**SPEC quality: Moderate.** The Codex agent was able to implement Tasks 6 and 7 correctly, and all tests passed. However, 8 defects were found — 3 of high severity. The main issues were:
+
+1. **Task dependency graph implicit** — PLAN did not surface that Tasks 6/7 depend on Tasks 1-3 (scaffolding + types + test config). A new agent had to deduce this.
+2. **Test validation gap** — Pure-type interfaces cannot be tested by Vitest alone; `tsc --noEmit` is required. This is a TypeScript-specific lesson that affected test design.
+3. **Undefined error types** — Even simple things like "where does `MockLLMExhaustedError` live" need explicit specification. Leaving details to "the implementer's judgment" creates ambiguity.
+
+**Key lesson:** The 30-minute implementation exercise found more defects than the earlier question-only session. This confirms §4.5's claim that **cold-start implementation is the most valuable spec quality signal.**

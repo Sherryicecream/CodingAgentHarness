@@ -32,6 +32,16 @@ export class DeepSeekAdapter implements LLMAdapter {
         content: m.content,
         ...(m.toolCallId ? { tool_call_id: m.toolCallId } : {}),
         ...(m.name ? { name: m.name } : {}),
+        ...(m.toolCalls && m.toolCalls.length > 0 ? {
+          tool_calls: m.toolCalls.map(tc => ({
+            id: tc.id,
+            type: 'function' as const,
+            function: {
+              name: tc.name,
+              arguments: JSON.stringify(tc.arguments),
+            },
+          })),
+        } : {}),
       })),
       tools: context.tools.length > 0 ? context.tools.map(t => ({
         type: 'function' as const,
@@ -55,7 +65,7 @@ export class DeepSeekAdapter implements LLMAdapter {
     if (!response.ok) {
       const text = await response.text();
       throw new LLMCallError(
-        `DeepSeek API error: ${response.status} ${response.statusText}`,
+        `DeepSeek API error: ${response.status} ${response.statusText} — ${text.slice(0, 200)}`,
         response.status,
         text,
       );

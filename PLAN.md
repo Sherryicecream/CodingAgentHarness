@@ -1,6 +1,8 @@
 # Coding Agent Harness · Implementation Plan
 
-> **Status: ALL PHASES COMPLETE ✅ — 278 tests passing, 62 tasks done**
+> **Status: ALL PHASES COMPLETE ✅ — 278 tests passing, 62 tasks done (current state as of 2026-08-03)**
+
+> **Note for cold-start validation:** Tasks 1–3 (scaffolding, types, Vitest config) are prerequisites for any implementation task. A cold-start agent must first establish the project skeleton before implementing later tasks.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -33,6 +35,20 @@
 - `@harness/core` 为纯库，`"type": "module"`
 - `@harness/server` 依赖 `@harness/core` + `express` + `react` + `vite`
 - `@harness/cli` 依赖 `@harness/core`
+- **devDependencies (TypeScript, Vitest, tsup) 在此阶段声明，确保后续 task 可编译和测试**
+
+**Dependencies to add to `packages/core/package.json`:**
+```json
+{
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0",
+    "tsup": "^8.0.0",
+    "@types/node": "^20.0.0",
+    "@types/uuid": "^10.0.0"
+  }
+}
+```
 
 **Test:**
 - `npm install` 在根目录成功
@@ -57,11 +73,11 @@ cd packages/core && npx tsc --noEmit  # 应通过
 
 ```typescript
 // LLM 层
-interface LLMAdapter { sendMessage(context: AgentContext): Promise<AgentResponse>; }
 interface AgentContext { messages: Message[]; tools: ToolDefinition[]; memory: MemoryEntry[]; config: AgentConfig; feedbackState: FeedbackState | null; }
 interface AgentResponse { content: string; toolCalls: ToolCallRequest[]; rawContent?: string; responseId?: string; model?: string; latencyMs?: number; usage?: { promptTokens: number; completionTokens: number; totalTokens: number; }; }
 interface ToolCallRequest { id: string; name: string; arguments: Record<string, unknown>; }
 interface Message { role: "system" | "user" | "assistant" | "tool"; content: string; toolCallId?: string; name?: string; }
+// LLMAdapter 接口定义在 llm/adapter.ts (Task 6)，types.ts 不重复定义
 
 // 工具层
 interface ToolDefinition { name: string; description: string; parameters: Record<string, unknown>; } // OpenAI tool schema
@@ -172,6 +188,16 @@ npm test   # 应遍历所有 workspace 运行测试
 
 **Phase 1 完成状态：** monorepo 可编译、可测试、CI 就绪。
 
+| Task | Commit | Status |
+|------|--------|--------|
+| Task 1: Monorepo 初始化 | `efded2f` | ✅ |
+| Task 2: 核心类型定义 | `87fb62a` | ✅ |
+| Task 3: Vitest 配置 | `f417cf5` | ✅ |
+| Task 4: 根目录脚本 | `b59f203` | ✅ |
+| Task 5: CI 配置 | `b59f203` | ✅ |
+
+**依赖：** 无（Phase 1 是基础，所有后续 task 依赖此阶段）
+
 ---
 
 ## Phase 2: LLM 抽象层 + Mock (Tasks 6–9)
@@ -195,7 +221,10 @@ export interface LLMAdapter {
 ```
 
 **Test (compile-time + 实现验证):**
-- 不写运行时测试（接口本身无可执行逻辑），但写一个使用接口的类型检查测试：
+- 接口本身无可执行逻辑，但需要验证 `adapter.ts` 模块存在且可被导入
+- 使用 `tsc --noEmit` 验证类型（Vitest 会擦除纯类型导入，不能独立验证纯类型模块存在）
+- 同时保留 Vitest 运行时测试作为辅助：
+
 ```typescript
 import { describe, it, expect } from 'vitest';
 import { LLMAdapter } from '../../src/llm/adapter.js';
@@ -216,7 +245,8 @@ describe('LLMAdapter interface', () => {
 
 **Verification:**
 ```bash
-cd packages/core && npx vitest run test/llm/adapter.test.ts
+cd packages/core && npx tsc --noEmit           # 类型检查通过（验证接口模块存在）
+cd packages/core && npx vitest run test/llm/adapter.test.ts  # 运行时测试通过
 ```
 
 ---
@@ -244,8 +274,9 @@ export class MockLLMAdapter implements LLMAdapter {
 
 **Behavior:**
 - 构造函数接收 `AgentResponse[]` 数组
+- 构造函数**浅复制**输入数组到内部存储，不修改调用者传入的数组
 - `sendMessage()` 每次调用按 FIFO 顺序返回下一个响应
-- 如果响应耗尽，抛出 `MockLLMExhaustedError`
+- 如果响应耗尽，抛出 `MockLLMExhaustedError`（定义在 `mock.ts` 中导出，`extends Error`，无参构造，消息为 `"MockLLMAdapter: no more responses"`）
 - `remainingCount` 返回剩余响应数
 
 **Test cases:**
@@ -340,6 +371,15 @@ cd packages/core && npx vitest run test/llm/response-parser.test.ts
 ---
 
 **Phase 2 完成状态：** LLM 层可 mock 测试、可接入真实 API，响应解析就绪。
+
+| Task | Commit | Status |
+|------|--------|--------|
+| Task 6: LLMAdapter 接口 | `fb28956` | ✅ |
+| Task 7: MockLLMAdapter | `2446233` | ✅ |
+| Task 8: DeepSeekAdapter | `b3e4aba` | ✅ |
+| Task 9: ResponseParser | `8032083` | ✅ |
+
+**依赖：** Phase 1 (Task 1-5) | **可并行：** Tasks 6-9 串行（逐层依赖）
 
 ---
 
@@ -615,6 +655,19 @@ cd packages/core && npx vitest run test/tools/git-commit.test.ts
 
 **Phase 3 完成状态：** 7 个工具全部就绪，ToolRegistry 可注册/分发/按风险筛选。
 
+| Task | Commit | Status |
+|------|--------|--------|
+| Task 10: ToolRegistry | `4f10970` | ✅ |
+| Task 11: read_file | `f8380b6` | ✅ |
+| Task 12: write_file | `cbf4d52` | ✅ |
+| Task 13: execute_shell | `f59a464` | ✅ |
+| Task 14: run_tests | `bca9191` | ✅ |
+| Task 15: search_code | `d179bc1` | ✅ |
+| Task 16: git_diff | `ed8fc27` | ✅ |
+| Task 17: git_commit | `dfa94e1` | ✅ |
+
+**依赖：** Phase 1-2 | **可并行：** Tasks 11-17 可并行（各工具独立）
+
 ---
 
 ## Phase 4: 护栏 + HITL (Tasks 18–22)
@@ -814,6 +867,16 @@ cd packages/core && npx vitest run test/guardrail/  # 所有护栏测试通过
 ---
 
 **Phase 4 完成状态：** 危险命令拦截 + HITL 状态机 + 机制演示 ① 就绪。
+
+| Task | Commit | Status |
+|------|--------|--------|
+| Task 18: Guardrail | `4339093` | ✅ |
+| Task 19: HITL | `f3fd903` | ✅ |
+| Task 20: 集成 | `cf1f291` | ✅ |
+| Task 21: 演示 ① | `cf1f291` | ✅ |
+| Task 22: 收尾 | `cf1f291` | ✅ |
+
+**依赖：** Phase 1-3 | **可并行：** Tasks 18-19 可并行后合并
 
 ---
 
@@ -1181,6 +1244,21 @@ cd packages/core && npx vitest run test/feedback/ test/demo/feedback-demo.test.t
 
 **Phase 5 完成状态：** 反馈闭环完整实现（TestRunner → ResultParser → FailureClassifier → FixSuggestionBuilder → FeedbackLoop），含插件化解析器、3 个演示用例。
 
+| Task | Commit | Status |
+|------|--------|--------|
+| Task 23: TestRunner | `aee5335` | ✅ |
+| Task 24: ResultParser | `7d66471` | ✅ |
+| Task 25: FailureClassifier | `243536e` | ✅ |
+| Task 26: FixSuggestionBuilder | `a3c8247` | ✅ |
+| Task 27: FeedbackLoop | `ddc1099` | ✅ |
+| Task 28: 演示 ② | `dba0ce3` | ✅ |
+| Task 29: 演示 ③ | `dba0ce3` | ✅ |
+| Task 30: 插件化 | `dba0ce3` | ✅ |
+| Task 31: 导出 | `dba0ce3` | ✅ |
+| Task 32: 收尾 | `dba0ce3` | ✅ |
+
+**依赖：** Phase 1-4 | **可并行：** Tasks 23-26 串行（流水线依赖），Tasks 28-32 可并行
+
 ---
 
 ## Phase 6: 记忆 + 配置 (Tasks 33–37)
@@ -1405,6 +1483,16 @@ cd packages/core && npx vitest run test/loop/stop-condition.test.ts
 
 **Phase 6 完成状态：** 记忆存储、上下文构建、配置加载、停机判断全部就绪。
 
+| Task | Commit | Status |
+|------|--------|--------|
+| Task 33: MemoryStore | `073c905` | ✅ |
+| Task 34: ContextBuilder | `073c905` | ✅ |
+| Task 35: ConfigLoader | `073c905` | ✅ |
+| Task 36: 导出 | `073c905` | ✅ |
+| Task 37: StopCondition | `073c905` | ✅ |
+
+**依赖：** Phase 1-5 | **可并行：** Tasks 33, 35, 37 可并行（独立模块）
+
 ---
 
 ## Phase 7: Agent 主循环 + 集成 (Tasks 38–43)
@@ -1623,6 +1711,8 @@ cd packages/core && npm test       # 所有测试仍通过
 **Files:**
 - Modify: `packages/core/package.json` (添加 dependencies)
 
+**Note:** 编译和测试所需的 devDependencies (TypeScript, Vitest, tsup) 已在 Phase 1 Task 1 中声明。此 task 补充运行时依赖。
+
 **Dependencies to add:**
 ```json
 {
@@ -1633,9 +1723,9 @@ cd packages/core && npm test       # 所有测试仍通过
     "uuid": "^10.0.0"
   },
   "devDependencies": {
+    "typescript": "^5.5.0",
     "vitest": "^2.0.0",
     "tsup": "^8.0.0",
-    "typescript": "^5.5.0",
     "@types/better-sqlite3": "^7.0.0",
     "@types/uuid": "^10.0.0",
     "nock": "^13.0.0"
@@ -1664,6 +1754,17 @@ cd packages/core && npm run build  # 预期：构建成功
 ---
 
 **Phase 7 完成状态：** AgentLoop 主循环完成，所有组件集成，`@harness/core` 可独立构建、全部测试通过。
+
+| Task | Commit | Status |
+|------|--------|--------|
+| Task 38: AgentLoop | `d9790e8` | ✅ |
+| Task 39: SessionStore | `d9790e8` | ✅ |
+| Task 40: 统一导出 | `d9790e8` | ✅ |
+| Task 41: build 配置 | `d9790e8` | ✅ |
+| Task 42: 依赖安装 | `d9790e8` | ✅ |
+| Task 43: 全部测试通过 | `d9790e8` | ✅ |
+
+**依赖：** Phase 1-6 | **可并行：** Tasks 39-42 可并行
 
 ---
 
@@ -1983,6 +2084,21 @@ cd packages/server && npm start
 
 **Phase 8 完成状态：** Server + Web 前端完整可用，agent 可以在浏览器中运行、实时展示、HITL 交互。
 
+| Task | Commit | Status |
+|------|--------|--------|
+| Task 44: Server 初始化 | `d05e21f` | ✅ |
+| Task 45: Express 骨架 | `d05e21f` | ✅ |
+| Task 46: Agent Route | `d05e21f` | ✅ |
+| Task 47: Session Route | `d05e21f` | ✅ |
+| Task 48: Config Route | `d05e21f` | ✅ |
+| Task 49: Vite+React 初始化 | `5844d59` | ✅ |
+| Task 50: ChatPanel | `5844d59` | ✅ |
+| Task 51: ToolCallCard+GuardrailDialog | `5844d59` | ✅ |
+| Task 52: FeedbackTimeline+SessionHistory | `5844d59` | ✅ |
+| Task 53: 端到端可运行 | `5844d59` | ✅ |
+
+**依赖：** Phase 1-7 | **可并行：** Tasks 44-48（后端）与 Tasks 49-52（前端）可并行开发
+
 ---
 
 ## Phase 9: CLI + 部署 + 文档 (Tasks 54–62)
@@ -2247,4 +2363,18 @@ cd packages/core && npm pack --dry-run  # 应显示打包内容
 
 ---
 
-**Phase 9 完成状态：** CLI 可用、Render 部署配置就绪、文档完整、CI 通过、npm 可发布。
+**Phase 9 完成状态：** CLI 可用、Docker/部署配置就绪、文档完整、CI 通过、npm 可发布。
+
+| Task | Commit | Status |
+|------|--------|--------|
+| Task 54: CLI 初始化 | `ddacaa6` | ✅ |
+| Task 55: Render 部署配置 | `ddacaa6` | ✅ |
+| Task 56: 凭据管理 | `ddacaa6` + Phase 1 重写 | ✅ |
+| Task 57: README.md | `ddacaa6` | ✅ |
+| Task 58: AGENT_LOG.md | `ddacaa6` | ✅ |
+| Task 59: SPEC_PROCESS.md | `ddacaa6` | ✅ |
+| Task 60: 冷启动验证 | `47edb81` + Codex 验证 | ✅ |
+| Task 61: CI/CD 验证 | `486dda7` | ✅ |
+| Task 62: npm publish 配置 | `486dda7` | ✅ |
+
+**依赖：** Phase 1-8 | **可并行：** Tasks 55-62 可并行（文档/配置/部署独立）
