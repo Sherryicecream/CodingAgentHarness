@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import {
-  createAgentLoop, MockLLMAdapter,
+  createAgentLoop, MockLLMAdapter, DeepSeekAdapter,
   createToolRegistry, createReadFileTool, createWriteFileTool,
   createExecuteShellTool, createRunTestsTool, createSearchCodeTool,
   createGitDiffTool, createGitCommitTool,
@@ -38,20 +38,25 @@ function buildAgentLoop(workingDir: string): AgentLoop {
   const contextBuilder = createContextBuilder();
   const stopCondition = createStopCondition();
 
-  // Use MockLLMAdapter with deterministic responses
-  const mockLLM = new MockLLMAdapter([
-    {
-      content: 'I will read the project files to understand the codebase.',
-      toolCalls: [{ id: 'call_1', name: 'read_file', arguments: { filePath: 'src/index.ts' } }],
-    },
-    {
-      content: 'Task completed successfully.',
-      toolCalls: [],
-    },
-  ]);
+  // Use real LLM if API key is configured, otherwise fall back to mock
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  const baseUrl = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com';
+
+  const llm = apiKey
+    ? new DeepSeekAdapter({ apiKey, baseUrl })
+    : new MockLLMAdapter([
+        {
+          content: 'I will read the project files to understand the codebase.',
+          toolCalls: [{ id: 'call_1', name: 'read_file', arguments: { filePath: 'src/index.ts' } }],
+        },
+        {
+          content: 'Task completed successfully.',
+          toolCalls: [],
+        },
+      ]);
 
   return createAgentLoop({
-    llm: mockLLM,
+    llm,
     tools,
     governance,
     feedback,
