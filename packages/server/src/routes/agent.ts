@@ -73,20 +73,18 @@ function emit(sessionId: string, type: SSEEvent['type'], data: unknown) {
 // POST /api/agent/run — Run an agent loop
 agentRouter.post('/run', async (req: Request, res: Response) => {
   try {
-    const { task, workingDir } = req.body;
-    if (!task || !workingDir) {
-      res.status(400).json({ error: 'task and workingDir are required' });
+    const { task, workingDir, sessionId } = req.body;
+    if (!task || !workingDir || !sessionId) {
+      res.status(400).json({ error: 'task, workingDir, and sessionId are required' });
       return;
     }
 
     const agentLoop = buildAgentLoop(workingDir);
-
-    const sessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
     activeLoops.set(sessionId, agentLoop);
 
     emit(sessionId, 'loop_step', { phase: 'starting', task });
 
-    // Run the agent loop (non-blocking via SSE)
+    // Run the agent loop
     agentLoop.run(task, workingDir).then(async (result) => {
       await sessionStore.save(result.session);
       emit(sessionId, 'complete', { status: result.status, sessionId: result.session.id });
