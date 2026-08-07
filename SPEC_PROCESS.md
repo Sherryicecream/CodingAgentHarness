@@ -211,9 +211,9 @@ Agent 被要求仅使用 SPEC 和 PLAN 文档实现 Tasks 6 和 7。它被指示
 
 | 文件 | 修订内容 | Commit |
 |------|----------|--------|
-| `SPEC.md` | 将 §10 和 §11 中的 "Vercel" 替换为 "Render"；统一部署目标 | 待定 |
-| `PLAN.md` | Task 2: 移除 `LLMAdapter` 接口定义（委托给 Task 6）。Task 6: 在验证命令中添加 `tsc --noEmit`。Task 7: 补充 `MockLLMExhaustedError` API 规范、数组复制语义。Task 1: 添加 devDependencies（TypeScript、Vitest） | 待定 |
-| `cold-start-prompt.md` | 移除 "existing `types.ts`" 假设，添加脚手架说明 | 待定 |
+| `SPEC.md` | 将 §10 和 §11 中的 "Vercel" 替换为 "Render"；统一部署目标 | `84a3530` |
+| `PLAN.md` | Task 2: 移除 `LLMAdapter` 接口定义（委托给 Task 6）。Task 6: 在验证命令中添加 `tsc --noEmit`。Task 7: 补充 `MockLLMExhaustedError` API 规范、数组复制语义。Task 1: 添加 devDependencies（TypeScript、Vitest） | `be10126` + `c4c36ec` |
+| `cold-start-prompt.md` | 移除 "existing `types.ts`" 假设，添加脚手架说明 | `fdb4e2e`（已删除） |
 
 ### 评估
 
