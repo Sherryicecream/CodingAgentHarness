@@ -105,3 +105,29 @@
   - `server.ts` — 启动日志中文化
   - `session.ts` — 未找到会话消息中文化
 - **状态:** 完成
+
+## 2026-08-07 — 收尾阶段：代码审查 + 创建回溯分支与 PR
+- **Tasks:** 代码审查（4 个严重问题修复）、回溯分支/PR 创建、AGENT_LOG.md 补充
+- **Skills:** superpowers:requesting-code-review（代码审查）
+- **产出:** 修复 4 个严重问题 | 为每个 Phase 创建回溯分支与 PR | 文档补充
+- **关键决策:**
+  - 开发时未使用 git worktree 工作区（所有 Phase 直接在 master 上开发）。为弥补，从 master 历史中为每个 Phase 创建回溯分支（cherry-pick 各 Phase 的 commits）并创建 PR
+  - 9 个 Phase 各对应一个分支：`phase-1-monorepo-setup` 到 `phase-9-finalization`
+  - 9 个 PR 已创建（PR #1-#9），可在 GitHub 查看
+  - 使用 GitHub API 创建 PR（无 gh CLI 环境）
+- **修复的严重问题:**
+  - C1: `agent-loop.ts` 中 `buildSession()` 硬编码状态 → 改为动态传入
+  - C2: `Dockerfile` 中 HEALTHCHECK 使用 `wget`（alpine 不存在）→ 改用 `node -e fetch`
+  - C3: `guardrail.ts` 中 `format` 正则误拦截 `npm run format` → 缩小为仅拦截 `format C:`
+  - C4: `agent-loop.ts` 中 `toolCalls as any` 类型逃逸 → 移除
+- **创建的分支:**
+  - `phase-1-monorepo-setup` → PR #1
+  - `phase-2-llm-abstraction` → PR #2
+  - `phase-3-tool-system` → PR #3
+  - `phase-4-governance` → PR #4
+  - `phase-5-feedback-loop` → PR #7
+  - `phase-6-memory-config` → PR #5
+  - `phase-7-agent-loop` → PR #6
+  - `phase-8-server-frontend` → PR #8
+  - `phase-9-finalization` → PR #9
+- **学到的教训:** 开发初期应使用 git worktree（`git worktree add`）隔离各 Phase 的工作区，避免 master 线性历史导致无法生成独立 PR。本项目的回溯 PR 虽然创建成功，但 cherry-pick 改变了 commit hash，丢失了原始 commit 与 GitHub 的关联。建议在 AI4SE 期末项目中引以为鉴，开发时主动使用 worktree。
