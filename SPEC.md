@@ -192,7 +192,7 @@ Agent = LLM + Harness。LLM 只负责"决定下一步做什么"，而 harness �
 ```
 ┌──────────────────────────────────────────────────┐
 │              浏览器 (用户入口)                      │
-│         http://<阿里云 ECS 公网 IP>:3000              │
+│         http://47.98.97.255:3000                      │
 └─────────────────────┬────────────────────────────┘
                       │ HTTP + SSE
 ┌─────────────────────┴────────────────────────────┐
@@ -323,7 +323,7 @@ interface MemoryEntry {
 | **主形态** | 阿里云 ECS 部署（Docker 容器化），浏览器打开即用；备选 Render 免费版 |
 | **辅助形态** | npm 包 `@harness/cli`（本地运行） |
 | 包结构 | `@harness/core` + `@harness/server` + `@harness/cli` |
-| 线上 URL | `https://harness.onrender.com`（Render 备选）或阿里云 ECS 公网 IP |
+| 线上 URL | `http://47.98.97.255:3000`（阿里云 ECS）或 `https://harness.onrender.com`（Render 备选） |
 | 本地安装 | `npm install -g @harness/cli` |
 | 本地运行 | `harness`（启动本地服务器 + 打开浏览器） |
 | 平台 | Node.js 18+，Windows / macOS / Linux |
