@@ -87,7 +87,8 @@
 - **修复的缺陷:** SPEC.md Vercel→Render 矛盾修复 | PLAN.md Task 2/6 LLMAdapter 重复定义修复 | PLAN.md 依赖声明提前到 Phase 1 | 冷启动 prompt 修正
 - **创建的文件:** credential-store.ts、ConfigPage.tsx、Dockerfile、.dockerignore、cold-start-prompt.md、cold-start-recording-template.md
 - **修改的文件:** config.ts、agent.ts、server.ts、App.tsx、styles.css、SPEC.md、PLAN.md、SPEC_PROCESS.md、README.md、packages/*/package.json
-- **状态:** 待定（阿里云部署未完成，REFLECTION.md 未填写）
+- **状态:** 完成 ✅（阿里云 ECS 已部署，公网 IP 47.98.97.255:3000 可访问；REFLECTION.md 已完成）
+- **后续修复:** `f6e5f3f` 更新部署公网 IP | `1be4bab` UI 中文化 + 引导增强 | `1162ace` 完成反思报告 | `33352ba` 修复任务完成后输入框可用状态
 
 ## 2026-08-03 — UI 中文化 + 引导增强（收尾阶段）
 - **Tasks:** UI 提升、中文化、增加引导
