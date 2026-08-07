@@ -19,7 +19,9 @@ const DEFAULT_PATTERNS: { pattern: RegExp; description: string }[] = [
   { pattern: /\bchmod\s+777\b/i, description: 'World-writable permissions' },
   { pattern: />\s*\/dev\/sd[a-z]/i, description: 'Direct disk write' },
   { pattern: /\bdd\s+if=/i, description: 'dd disk copy' },
-  { pattern: /\bformat\b/i, description: 'Format command' },
+  // Only block destructive format commands (e.g., format C:, format D:)
+  // but allow harmless uses like "npm run format" or "eslint --fix"
+  { pattern: /\bformat\s+[a-z]:[/\\]/i, description: 'Disk format command' },
   { pattern: /\bmkfs\b/i, description: 'Make filesystem' },
 ];
 
