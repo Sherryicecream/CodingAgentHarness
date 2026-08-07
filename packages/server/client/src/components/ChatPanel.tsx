@@ -50,6 +50,13 @@ export function ChatPanel() {
     .filter(e => e.type === 'feedback')
     .map(e => e.data);
 
+  // 任务完成或出错时，恢复输入框可用
+  React.useEffect(() => {
+    if (lastEvent?.type === 'complete' || lastEvent?.type === 'error') {
+      setRunning(false);
+    }
+  }, [lastEvent]);
+
   return (
     <div className="chat-panel">
       {/* 输入区域 */}
