@@ -52,9 +52,9 @@ COPY --from=build /app/packages/server/package.json ./packages/server/
 COPY --from=build /app/packages/cli/dist ./packages/cli/dist
 COPY --from=build /app/packages/cli/package.json ./packages/cli/
 
-# Health check
+# Health check — use Node.js fetch instead of wget (not available in alpine)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1
+  CMD node -e "fetch('http://localhost:3000/api/health').then(r => process.exit(r.ok?0:1)).catch(() => process.exit(1))"
 
 # Start the server
 WORKDIR /app/packages/server

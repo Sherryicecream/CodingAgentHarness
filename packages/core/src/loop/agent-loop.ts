@@ -72,7 +72,7 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
           // Pre-check (guardrail)
           if (!deps.governance.preCheck(tc)) {
             deps.onEvent?.('guardrail', { toolCall: tc, decision: 'blocked' });
-            return { status: 'blocked', session: buildSession() };
+            return { status: 'blocked', session: buildSession('blocked') };
           }
 
           // Execute tool
@@ -161,22 +161,22 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
           };
           return {
             status: statusMap[stopResult.reason!] || 'failed',
-            session: buildSession(),
+            session: buildSession(statusMap[stopResult.reason!] || 'failed'),
           };
         }
       }
 
-      return { status: 'failed', session: buildSession() };
+      return { status: 'failed', session: buildSession('failed') };
 
-      function buildSession(): Session {
+      function buildSession(actualStatus: string): Session {
         return {
           id: generateId(),
           createdAt: new Date(),
           task,
           messages,
-          toolCalls: toolCalls as any,
+          toolCalls,
           feedbackRuns,
-          status: 'completed',
+          status: actualStatus as Session['status'],
           conclusion: null,
         };
       }
