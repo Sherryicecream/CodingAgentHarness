@@ -286,7 +286,7 @@ services:
 4. `cd CodingAgentHarness && npm install && npm run build`
 5. `cd packages/server && NODE_ENV=production npm start`
 6. 配置安全组：入方向开放 3000 端口
-7. 访问 `http://<your-ip>:3000`
+7. 访问 `http://47.98.97.255:3000`
 
 ---
 
