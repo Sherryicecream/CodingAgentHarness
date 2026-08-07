@@ -139,6 +139,14 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
               lastResult: fbResult,
               iteration,
             };
+
+            // Check feedback loop's shouldContinue (respects maxIterations cap)
+            // If the feedback loop says we should not continue, stop the entire agent loop
+            if (!deps.feedback.shouldContinue(fbResult, feedbackState, deps.config.maxIterations)) {
+              if (fbResult.status === 'fail') {
+                testPassed = false;
+              }
+            }
           }
         }
 

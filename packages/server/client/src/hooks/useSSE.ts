@@ -15,25 +15,33 @@ export function useSSE(sessionId: string | null) {
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const connectionResolveRef = useRef<(() => void) | null>(null);
+  const connectionPromiseRef = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     if (!sessionId) return;
 
     setEvents([]);
     setError(null);
+    setIsConnected(false);
 
-    // Connect to SSE FIRST, before any events are emitted
+    // Create a promise that resolves when SSE connects
+    connectionPromiseRef.current = new Promise<void>((resolve) => {
+      connectionResolveRef.current = resolve;
+    });
+
     const es = new EventSource(`/api/agent/stream/${sessionId}`);
     eventSourceRef.current = es;
 
     es.onopen = () => {
       setIsConnected(true);
+      connectionResolveRef.current?.();
+      connectionResolveRef.current = null;
     };
 
     es.onmessage = (event) => {
       const parsed = JSON.parse(event.data);
       setEvents(prev => [...prev, parsed]);
-      // If it's an error event, also set the error state
       if (parsed.type === 'error') {
         setError(parsed.data?.message || '发生了一个错误');
       }
@@ -44,7 +52,6 @@ export function useSSE(sessionId: string | null) {
     };
 
     es.onerror = () => {
-      // EventSource auto-reconnects, only show error after multiple failures
       if (es.readyState === EventSource.CLOSED) {
         setIsConnected(false);
       }
@@ -53,8 +60,21 @@ export function useSSE(sessionId: string | null) {
     return () => {
       es.close();
       setIsConnected(false);
+      connectionPromiseRef.current = null;
+      connectionResolveRef.current = null;
     };
   }, [sessionId]);
 
-  return { events, isConnected, error };
+  /** Wait for the SSE connection to be established (use after setting sessionId) */
+  const waitForConnection = async (timeoutMs = 3000): Promise<boolean> => {
+    const promise = connectionPromiseRef.current;
+    if (!promise) return false;
+    const result = await Promise.race([
+      promise.then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs)),
+    ]);
+    return result;
+  };
+
+  return { events, isConnected, error, waitForConnection };
 }

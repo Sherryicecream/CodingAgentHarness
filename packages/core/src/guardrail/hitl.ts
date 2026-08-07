@@ -33,7 +33,6 @@ export function createHITLManager(): HITLManager {
       if (_state !== 'running') {
         throw new HITLStateError(`Cannot request approval in state: ${_state}`);
       }
-      _state = 'blocked';
       _pendingAction = action;
       _state = 'waiting_user';
     },

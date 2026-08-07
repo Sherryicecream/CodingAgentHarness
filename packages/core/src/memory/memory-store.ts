@@ -72,7 +72,7 @@ export async function createMemoryStore(dbPath: string): Promise<MemoryStore> {
     };
   }
 
-  const add = (async (entry: Omit<MemoryEntry, 'id' | 'createdAt' | 'lastAccessedAt'>): Promise<MemoryEntry> => {
+  const add = ((entry: Omit<MemoryEntry, 'id' | 'createdAt' | 'lastAccessedAt'>): Promise<MemoryEntry> => {
     const id = uuidv4();
     const now = new Date().toISOString();
     db.run(
@@ -80,15 +80,15 @@ export async function createMemoryStore(dbPath: string): Promise<MemoryStore> {
       [id, entry.type, entry.content, entry.source, entry.projectPath ?? '', now, now]
     );
     saveDb();
-    return {
+    return Promise.resolve({
       id,
       ...entry,
       createdAt: new Date(now),
       lastAccessedAt: new Date(now),
-    };
+    });
   }) as MemoryStore['add'];
 
-  const search = (async (query: string, options?: { type?: string; limit?: number }): Promise<MemoryEntry[]> => {
+  const search = ((query: string, options?: { type?: string; limit?: number }): Promise<MemoryEntry[]> => {
     const limit = options?.limit ?? 10;
     let sql = 'SELECT * FROM memories WHERE content LIKE ?';
     const params: any[] = [`%${query}%`];
@@ -113,28 +113,29 @@ export async function createMemoryStore(dbPath: string): Promise<MemoryStore> {
       saveDb();
     }
 
-    return rows.map(rowToEntry);
+    return Promise.resolve(rows.map(rowToEntry));
   }) as MemoryStore['search'];
 
-  const list = (async (projectPath: string): Promise<MemoryEntry[]> => {
+  const list = ((projectPath: string): Promise<MemoryEntry[]> => {
     const rows = queryAll(
       'SELECT * FROM memories WHERE project_path = ? ORDER BY last_accessed_at DESC',
       [projectPath]
     );
-    return rows.map(rowToEntry);
+    return Promise.resolve(rows.map(rowToEntry));
   }) as MemoryStore['list'];
 
-  const _delete = (async (id: string): Promise<void> => {
+  const _delete = ((id: string): Promise<void> => {
     db.run('DELETE FROM memories WHERE id = ?', [id]);
     saveDb();
+    return Promise.resolve();
   }) as MemoryStore['delete'];
 
-  const getByType = (async (projectPath: string, type: MemoryEntry['type']): Promise<MemoryEntry[]> => {
+  const getByType = ((projectPath: string, type: MemoryEntry['type']): Promise<MemoryEntry[]> => {
     const rows = queryAll(
       'SELECT * FROM memories WHERE project_path = ? AND type = ? ORDER BY last_accessed_at DESC',
       [projectPath, type]
     );
-    return rows.map(rowToEntry);
+    return Promise.resolve(rows.map(rowToEntry));
   }) as MemoryStore['getByType'];
 
   return { add, search, list, delete: _delete, getByType };

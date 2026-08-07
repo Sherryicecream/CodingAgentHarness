@@ -15,7 +15,7 @@ export function ChatPanel() {
   const [task, setTask] = useState('');
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
-  const { events, isConnected, error } = useSSE(sessionId);
+  const { events, isConnected, error, waitForConnection } = useSSE(sessionId);
 
   const handleSubmit = async (customTask?: string) => {
     const finalTask = customTask || task;
@@ -26,7 +26,9 @@ export function ChatPanel() {
     const sid = generateSessionId();
     setSessionId(sid);
 
-    await new Promise(r => setTimeout(r, 100));
+    // Wait for SSE connection to establish before sending the POST request
+    // This ensures events are not lost due to the race between SSE and POST
+    await waitForConnection(5000);
 
     try {
       const res = await fetch('/api/agent/run', {

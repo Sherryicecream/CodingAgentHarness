@@ -7,8 +7,8 @@ function makeToolCall(id: string, name: string, args: Record<string, unknown> = 
 }
 
 describe('parseResponse', () => {
-  // 1. Text only, no tool calls → isComplete: true
-  it('returns isComplete true for text-only response with no tool calls', () => {
+  // 1. Text only, no tool calls → isComplete: false (must use TASK_COMPLETE marker)
+  it('returns isComplete false for text-only response without completion marker', () => {
     const response: AgentResponse = {
       content: 'Here is the final answer to your question.',
       toolCalls: [],
@@ -18,7 +18,7 @@ describe('parseResponse', () => {
 
     expect(result.text).toBe('Here is the final answer to your question.');
     expect(result.toolCalls).toEqual([]);
-    expect(result.isComplete).toBe(true);
+    expect(result.isComplete).toBe(false);
   });
 
   // 2. Contains tool calls → isComplete: false
@@ -163,7 +163,7 @@ describe('parseResponse', () => {
 
     const result = parseResponse(response);
 
-    // Whitespace is > 0 length, so it looks like a final answer
-    expect(result.isComplete).toBe(true);
+    // Whitespace without a completion marker is NOT complete
+    expect(result.isComplete).toBe(false);
   });
 });

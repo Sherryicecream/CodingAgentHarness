@@ -131,9 +131,9 @@ describe('AgentLoop', () => {
       expect(result.session.messages[0].content).toContain('TASK_COMPLETE');
     });
 
-    it('should complete when LLM returns text-only response with no tool calls', async () => {
+    it('should complete when LLM returns text-only response with TASK_COMPLETE marker', async () => {
       const llm = new MockLLMAdapter([
-        makeResponse('Here is the final answer.'),
+        makeResponse('Here is the final answer. TASK_COMPLETE'),
       ]);
       const tools = createToolRegistry();
       const governance = createGovernanceService();

@@ -8,7 +8,7 @@ export interface ParsedResponse {
 
 const COMPLETE_MARKERS = [
   'TASK_COMPLETE',
-  '任务完成',
+  '任务完成',  // Chinese marker — toUpperCase() is a no-op for CJK, which is fine
   'TASK COMPLETE',
 ];
 
@@ -25,10 +25,11 @@ export function parseResponse(response: AgentResponse): ParsedResponse {
     text.toUpperCase().includes(marker.toUpperCase()),
   );
 
-  // If no tool calls and no complete marker, check if text looks like a final answer
-  const looksLikeFinalAnswer = toolCalls.length === 0 && text.length > 0;
-
-  const isComplete = hasCompleteMarker || looksLikeFinalAnswer;
+  // Only treat as complete if the LLM explicitly signals completion.
+  // A text-only response without tool calls is NOT necessarily complete —
+  // the LLM may be thinking/planning. The LLM should use TASK_COMPLETE
+  // when finished, or make a tool call to continue.
+  const isComplete = hasCompleteMarker;
 
   return { text, toolCalls, isComplete };
 }

@@ -2,15 +2,27 @@
 import { exec } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as path from 'node:path';
+import { createRequire } from 'node:module';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
 
 async function main() {
   console.log('Harness - Coding Agent');
   console.log('Starting server...');
 
-  // Start the server
-  const serverPath = path.resolve(__dirname, '../../server/dist/server.js');
+  // Resolve server path:
+  // 1. Environment variable override (for custom installations)
+  // 2. Try to resolve via require (works when installed as a package dependency)
+  // 3. Fall back to relative path (for monorepo development)
+  const serverPath = process.env.HARNESS_SERVER_PATH
+    || (() => {
+      try {
+        return require.resolve('@harness/server');
+      } catch {
+        return path.resolve(__dirname, '../../server/dist/server.js');
+      }
+    })();
 
   try {
     // Try to import and start the server

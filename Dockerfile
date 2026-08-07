@@ -7,27 +7,30 @@
 FROM node:22-alpine AS deps
 WORKDIR /app
 
-# Copy package files
-COPY package.json package-lock.json ./
+# Copy package files (package-lock.json may not exist in all environments)
+COPY package.json ./
+COPY package-lock.json* ./
 COPY packages/core/package.json packages/core/
 COPY packages/server/package.json packages/server/
 COPY packages/cli/package.json packages/cli/
 
-# Install dependencies (no devDependencies in production)
-RUN npm ci --omit=dev
+# Install dependencies — use npm install if lock file is missing, npm ci if present
+RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi
 
 # ---- Stage 2: Build ----
 FROM node:22-alpine AS build
 WORKDIR /app
 
 # Copy root config
-COPY package.json package-lock.json tsconfig.base.json ./
+COPY package.json ./
+COPY package-lock.json* ./
+COPY tsconfig.base.json ./
 COPY packages/core/ packages/core/
 COPY packages/server/ packages/server/
 COPY packages/cli/ packages/cli/
 
 # Install all dependencies (including devDependencies for build)
-RUN npm ci
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
 # Build all packages
 RUN npm run build

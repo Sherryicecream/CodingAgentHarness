@@ -23,6 +23,8 @@ const DEFAULT_PATTERNS: { pattern: RegExp; description: string }[] = [
   // but allow harmless uses like "npm run format" or "eslint --fix"
   { pattern: /\bformat\s+[a-z]:[/\\]/i, description: 'Disk format command' },
   { pattern: /\bmkfs\b/i, description: 'Make filesystem' },
+  // Git-sensitive file writes (defense-in-depth: also checked in write_file tool)
+  { pattern: /\.git\s*[\\/]\s*(config|HEAD|hooks|objects|refs)/i, description: 'Git repository file write' },
 ];
 
 export function createGuardrail(config?: { blockedCommands?: string[] }): Guardrail {
@@ -38,18 +40,20 @@ export function createGuardrail(config?: { blockedCommands?: string[] }): Guardr
 
   return {
     check(toolCall: ToolCallRequest): GuardrailDecision {
-      // Only check execute_shell and git_commit tools
-      // For other tools, check the command argument if it exists
-      const commandStr = toolCall.arguments?.command
-        ? String(toolCall.arguments.command)
-        : '';
+      // Collect all string arguments to check for dangerous patterns
+      const args = toolCall.arguments || {};
+      const commandStr = args.command ? String(args.command) : '';
+      const pathStr = args.path ? String(args.path) : '';
+      const filePathStr = args.filePath ? String(args.filePath) : '';
 
-      if (!commandStr) {
+      const combined = [commandStr, pathStr, filePathStr].join('\n');
+
+      if (!combined.trim()) {
         return 'allowed';
       }
 
-      for (const { pattern, description: _desc } of patterns) {
-        if (pattern.test(commandStr)) {
+      for (const { pattern } of patterns) {
+        if (pattern.test(combined)) {
           return 'blocked';
         }
       }

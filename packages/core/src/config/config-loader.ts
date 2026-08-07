@@ -41,6 +41,15 @@ export function createConfigLoader(): ConfigLoader {
         if (!this.validate(merged)) {
           throw new ConfigValidationError('Invalid config structure');
         }
+        // Warn about unknown fields (typo detection)
+        const knownFields = ['maxIterations', 'testCommand', 'allowedTools', 'blockedCommands', 'ignoredPaths'];
+        if (raw && typeof raw === 'object') {
+          for (const key of Object.keys(raw)) {
+            if (!knownFields.includes(key)) {
+              console.warn(`[harness] Warning: unknown config field "${key}" in ${configPath}`);
+            }
+          }
+        }
         return merged;
       } catch (err: any) {
         if (err instanceof ConfigValidationError) throw err;

@@ -10,20 +10,29 @@ export interface SessionStore {
 }
 
 export function createSessionStore(basePath: string): SessionStore {
-  // Ensure directory exists
-  fs.mkdirSync(basePath, { recursive: true });
+  let initialized = false;
+
+  function ensureDir(): void {
+    if (!initialized) {
+      fs.mkdirSync(basePath, { recursive: true });
+      initialized = true;
+    }
+  }
 
   return {
     async save(session) {
+      ensureDir();
       const filePath = path.join(basePath, `${session.id}.json`);
       fs.writeFileSync(filePath, JSON.stringify(session, null, 2));
     },
     async load(id) {
+      ensureDir();
       const filePath = path.join(basePath, `${id}.json`);
       if (!fs.existsSync(filePath)) return null;
       return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     },
     async list(limit = 50) {
+      ensureDir();
       const files = fs.readdirSync(basePath)
         .filter(f => f.endsWith('.json'))
         .map(f => path.join(basePath, f))
@@ -32,6 +41,7 @@ export function createSessionStore(basePath: string): SessionStore {
       return files.map(f => JSON.parse(fs.readFileSync(f, 'utf-8')));
     },
     async delete(id) {
+      ensureDir();
       const filePath = path.join(basePath, `${id}.json`);
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     },
