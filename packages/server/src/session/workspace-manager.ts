@@ -26,10 +26,11 @@ export interface WorkspaceCommitFileSystem {
   lstatSync(path: string, options: { bigint: true }): WorkspaceCommitStats;
   openSync(path: string, flags: number, mode?: number): number;
   fstatSync(fd: number, options: { bigint: true }): WorkspaceCommitStats;
-  ftruncateSync(fd: number, length?: number): void;
   writeSync(fd: number, buffer: Uint8Array, offset: number, length: number): number;
   fsyncSync(fd: number): void;
   closeSync(fd: number): void;
+  renameSync(oldPath: string, newPath: string): void;
+  unlinkSync(path: string): void;
 }
 
 export interface WorkspaceManagerOptions {
@@ -105,12 +106,13 @@ const defaultCommitFileSystem: WorkspaceCommitFileSystem = {
   lstatSync: (path) => nodeSyncFs.lstatSync(path, { bigint: true }),
   openSync: (path, flags, mode) => nodeSyncFs.openSync(path, flags, mode),
   fstatSync: (fd) => nodeSyncFs.fstatSync(fd, { bigint: true }),
-  ftruncateSync: (fd, length) => nodeSyncFs.ftruncateSync(fd, length),
   writeSync: (fd, buffer, offset, length) => (
     nodeSyncFs.writeSync(fd, buffer, offset, length)
   ),
   fsyncSync: (fd) => nodeSyncFs.fsyncSync(fd),
   closeSync: (fd) => nodeSyncFs.closeSync(fd),
+  renameSync: (oldPath, newPath) => nodeSyncFs.renameSync(oldPath, newPath),
+  unlinkSync: (path) => nodeSyncFs.unlinkSync(path),
 };
 
 export const createWorkspaceManager = (
@@ -272,6 +274,63 @@ export const createWorkspaceManager = (
     }
   };
 
+  const assertTargetUnchanged = (
+    target: string,
+    expected: WorkspaceCommitStats | null,
+  ): void => {
+    const current = readSynchronousTarget(target);
+    if (
+      (expected === null && current !== null)
+      || (expected !== null && current === null)
+      || (
+        expected !== null
+        && current !== null
+        && identityOf(expected) !== identityOf(current)
+      )
+    ) {
+      throw new Error('File target identity changed');
+    }
+  };
+
+  const closePreparedDescriptor = (fd: number): void => {
+    try {
+      commitFs.closeSync(fd);
+    } catch (closeError) {
+      try {
+        commitFs.closeSync(fd);
+      } catch (retryError) {
+        if (errorCode(retryError) !== 'EBADF') {
+          throw new AggregateError(
+            [closeError, retryError],
+            'Workspace temporary descriptor close failed',
+          );
+        }
+      }
+      throw closeError;
+    }
+  };
+
+  const cleanupOwnedTemporaryFile = (
+    temporaryPath: string,
+    expectedIdentity: string,
+  ): void => {
+    let current: WorkspaceCommitStats;
+    try {
+      current = commitFs.lstatSync(temporaryPath, { bigint: true });
+    } catch (error) {
+      if (errorCode(error) === 'ENOENT') return;
+      throw error;
+    }
+    if (
+      current.isSymbolicLink()
+      || !current.isFile()
+      || identityOf(current) !== expectedIdentity
+    ) {
+      return;
+    }
+    commitFs.unlinkSync(temporaryPath);
+  };
+
   const commitDirectChild = (
     root: CanonicalRoot,
     workspace: IssuedWorkspace,
@@ -282,34 +341,38 @@ export const createWorkspaceManager = (
     assertWriteNotAborted(signal);
     assertSynchronousDirectoryIdentity(root.path, root.identity);
     assertSynchronousDirectoryIdentity(workspace.path, workspace.identity);
-    const targetBeforeOpen = readSynchronousTarget(target);
+    const targetBeforeCommit = readSynchronousTarget(target);
+    const temporaryPath = resolve(join(
+      workspace.path,
+      `.harness-write-${randomUUID()}.tmp`,
+    ));
+    assertDirectChild(workspace.path, temporaryPath);
     const noFollow = nodeSyncFs.constants.O_NOFOLLOW ?? 0;
     const flags = nodeSyncFs.constants.O_WRONLY
       | noFollow
-      | (targetBeforeOpen
-        ? 0
-        : nodeSyncFs.constants.O_CREAT | nodeSyncFs.constants.O_EXCL);
+      | nodeSyncFs.constants.O_CREAT
+      | nodeSyncFs.constants.O_EXCL;
     let fd: number | undefined;
+    let temporaryIdentity: string | undefined;
+    let renamed = false;
     try {
       // There is deliberately no await from the final identity checks through
-      // close. On Windows O_NOFOLLOW is unavailable, so lstat/open/fstat only
+      // rename. On Windows O_NOFOLLOW is unavailable, so lstat/open/fstat only
       // guarantees the remote-public threat model; it does not claim to defeat
       // a malicious same-account local process racing this synchronous section.
-      fd = commitFs.openSync(target, flags, 0o600);
+      fd = commitFs.openSync(temporaryPath, flags, 0o600);
       const descriptor = commitFs.fstatSync(fd, { bigint: true });
       if (!descriptor.isFile()) throw new Error('Write descriptor is not a regular file');
-      const targetAfterOpen = commitFs.lstatSync(target, { bigint: true });
+      temporaryIdentity = identityOf(descriptor);
+      const temporaryAfterOpen = commitFs.lstatSync(temporaryPath, { bigint: true });
       if (
-        targetAfterOpen.isSymbolicLink()
-        || !targetAfterOpen.isFile()
-        || identityOf(targetAfterOpen) !== identityOf(descriptor)
-        || (targetBeforeOpen && identityOf(targetBeforeOpen) !== identityOf(descriptor))
+        temporaryAfterOpen.isSymbolicLink()
+        || !temporaryAfterOpen.isFile()
+        || identityOf(temporaryAfterOpen) !== temporaryIdentity
       ) {
-        throw new Error('File target identity changed');
+        throw new Error('Temporary file identity changed');
       }
-      assertSynchronousDirectoryIdentity(root.path, root.identity);
-      assertSynchronousDirectoryIdentity(workspace.path, workspace.identity);
-      if (targetBeforeOpen) commitFs.ftruncateSync(fd, 0);
+
       const bytes = Buffer.from(content, 'utf8');
       let offset = 0;
       while (offset < bytes.length) {
@@ -318,8 +381,46 @@ export const createWorkspaceManager = (
         offset += written;
       }
       commitFs.fsyncSync(fd);
-    } finally {
-      if (fd !== undefined) commitFs.closeSync(fd);
+      const preparedFd = fd;
+      fd = undefined;
+      closePreparedDescriptor(preparedFd);
+
+      assertWriteNotAborted(signal);
+      assertSynchronousDirectoryIdentity(root.path, root.identity);
+      assertSynchronousDirectoryIdentity(workspace.path, workspace.identity);
+      assertTargetUnchanged(target, targetBeforeCommit);
+      commitFs.renameSync(temporaryPath, target);
+      renamed = true;
+
+      const committed = readSynchronousTarget(target);
+      if (committed === null || identityOf(committed) !== temporaryIdentity) {
+        throw new Error('Workspace final identity mismatch after rename');
+      }
+    } catch (error) {
+      let failure: unknown = error;
+      if (fd !== undefined) {
+        const incompleteFd = fd;
+        fd = undefined;
+        try {
+          closePreparedDescriptor(incompleteFd);
+        } catch (closeError) {
+          failure = new AggregateError(
+            [failure, closeError],
+            'Workspace temporary file operation and close failed',
+          );
+        }
+      }
+      if (!renamed && temporaryIdentity !== undefined) {
+        try {
+          cleanupOwnedTemporaryFile(temporaryPath, temporaryIdentity);
+        } catch (cleanupError) {
+          failure = new AggregateError(
+            [failure, cleanupError],
+            'Workspace write failed and temporary cleanup failed',
+          );
+        }
+      }
+      throw failure;
     }
   };
 

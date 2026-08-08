@@ -3,7 +3,7 @@ import * as nodeSyncFs from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createWorkspaceManager,
   type WorkspaceFileSystem,
@@ -103,6 +103,7 @@ const createWorkspaceClientSwapFileSystem = (
 };
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(temporaryPaths.splice(0).map((path) => rm(path, {
     recursive: true,
     force: true,
@@ -141,6 +142,105 @@ describe('createWorkspaceManager', () => {
     expect(await readFile(join(issued, 'demo.ts'), 'utf8')).toBe('corrected');
   });
 
+  const failureModes = [
+    'short-then-zero',
+    'short-then-throw',
+    'write-throw',
+    'fsync-throw',
+    'close-throw',
+  ] as const;
+
+  it.each(failureModes.flatMap((failure) => ([
+    { failure, existing: false },
+    { failure, existing: true },
+  ])))('preserves the final path on $failure when existing=$existing', async ({
+    failure,
+    existing,
+  }) => {
+    const root = await createTemporaryDirectory('harness-workspaces-');
+    let writeCalls = 0;
+    const commitFs = {
+      ...nodeSyncFs,
+      writeSync(fd: number, buffer: Uint8Array, offset: number, length: number) {
+        writeCalls += 1;
+        if (failure === 'write-throw') throw new Error('INJECTED_WRITE_FAILURE');
+        if (failure === 'short-then-zero') {
+          if (writeCalls === 1) return nodeSyncFs.writeSync(fd, buffer, offset, 2);
+          return 0;
+        }
+        if (failure === 'short-then-throw') {
+          if (writeCalls === 1) return nodeSyncFs.writeSync(fd, buffer, offset, 2);
+          throw new Error('INJECTED_SHORT_WRITE_FAILURE');
+        }
+        return nodeSyncFs.writeSync(fd, buffer, offset, length);
+      },
+      fsyncSync(fd: number) {
+        if (failure === 'fsync-throw') throw new Error('INJECTED_FSYNC_FAILURE');
+        nodeSyncFs.fsyncSync(fd);
+      },
+      closeSync(fd: number) {
+        nodeSyncFs.closeSync(fd);
+        if (failure === 'close-throw') throw new Error('INJECTED_CLOSE_FAILURE');
+      },
+      renameSync: nodeSyncFs.renameSync,
+      unlinkSync: nodeSyncFs.unlinkSync,
+    };
+    const manager = createWorkspaceManager({ root, commitFs });
+    const issued = await manager.create('session-one');
+    const finalPath = join(issued, 'demo.ts');
+    if (existing) await writeFile(finalPath, 'original');
+
+    await expect(manager.writeIssuedFile('session-one', 'demo.ts', 'replacement'))
+      .rejects.toThrow(/write|fsync|close|progress|injected/i);
+
+    if (existing) {
+      expect(await readFile(finalPath, 'utf8')).toBe('original');
+    } else {
+      await expect(readFile(finalPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+    expect((await readdir(issued)).filter((entry) => (
+      entry.startsWith('.harness-write-') && entry.endsWith('.tmp')
+    ))).toEqual([]);
+  });
+
+  it('does not unlink a replacement swapped onto the owned temporary path', async () => {
+    const root = await createTemporaryDirectory('harness-workspaces-');
+    let temporaryPath: string | undefined;
+    let replacementPath: string | undefined;
+    const commitFs = {
+      ...nodeSyncFs,
+      openSync(path: nodeSyncFs.PathLike, flags: number, mode?: number) {
+        const fd = nodeSyncFs.openSync(path, flags, mode);
+        if (basename(String(path)).startsWith('.harness-write-')) {
+          temporaryPath = String(path);
+        }
+        return fd;
+      },
+      closeSync(fd: number) {
+        nodeSyncFs.closeSync(fd);
+        if (temporaryPath) {
+          nodeSyncFs.renameSync(temporaryPath, `${temporaryPath}-owned`);
+          replacementPath = temporaryPath;
+          nodeSyncFs.writeFileSync(replacementPath, 'replacement-owned-elsewhere');
+        }
+        throw new Error('INJECTED_CLOSE_REPLACEMENT');
+      },
+      renameSync: nodeSyncFs.renameSync,
+      unlinkSync: nodeSyncFs.unlinkSync,
+    };
+    const manager = createWorkspaceManager({ root, commitFs });
+    const issued = await manager.create('session-one');
+
+    await expect(manager.writeIssuedFile('session-one', 'demo.ts', 'unsafe'))
+      .rejects.toThrow(/close|replacement|injected/i);
+
+    expect(temporaryPath).toBeDefined();
+    expect(replacementPath).toBe(temporaryPath);
+    expect(await readFile(replacementPath!, 'utf8')).toBe('replacement-owned-elsewhere');
+    await expect(readFile(join(issued, 'demo.ts'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('rejects nested file paths so the commit target is always a direct child', async () => {
     const root = await createTemporaryDirectory('harness-workspaces-');
     const manager = createWorkspaceManager({ root });
@@ -152,7 +252,7 @@ describe('createWorkspaceManager', () => {
       .rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('does not yield between the final target check and descriptor commit', async () => {
+  it('does not yield between the final target check and synchronous rename commit', async () => {
     const root = await createTemporaryDirectory('harness-workspaces-');
     const outside = await createTemporaryDirectory('harness-outside-');
     const sentinel = join(outside, 'keep.txt');
@@ -161,8 +261,13 @@ describe('createWorkspaceManager', () => {
     let target = '';
     const commitFs = {
       lstatSync: nodeSyncFs.lstatSync,
-      openSync(path: nodeSyncFs.PathLike, flags: number, mode?: number) {
-        if (String(path) === target && !scheduledSwap) {
+      openSync: nodeSyncFs.openSync,
+      fstatSync: nodeSyncFs.fstatSync,
+      writeSync: nodeSyncFs.writeSync,
+      fsyncSync: nodeSyncFs.fsyncSync,
+      closeSync: nodeSyncFs.closeSync,
+      renameSync(oldPath: nodeSyncFs.PathLike, newPath: nodeSyncFs.PathLike) {
+        if (String(newPath) === target && !scheduledSwap) {
           scheduledSwap = Promise.resolve().then(async () => {
             await rename(target, `${target}-committed`);
             await symlink(
@@ -172,13 +277,9 @@ describe('createWorkspaceManager', () => {
             );
           });
         }
-        return nodeSyncFs.openSync(path, flags, mode);
+        nodeSyncFs.renameSync(oldPath, newPath);
       },
-      fstatSync: nodeSyncFs.fstatSync,
-      ftruncateSync: nodeSyncFs.ftruncateSync,
-      writeSync: nodeSyncFs.writeSync,
-      fsyncSync: nodeSyncFs.fsyncSync,
-      closeSync: nodeSyncFs.closeSync,
+      unlinkSync: nodeSyncFs.unlinkSync,
     };
     const manager = createWorkspaceManager({ root, commitFs });
     const issued = await manager.create('session-one');
