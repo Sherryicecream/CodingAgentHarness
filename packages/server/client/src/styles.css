@@ -802,3 +802,135 @@ ul {
   color: var(--color-text-secondary);
   line-height: 1.5;
 }
+
+/* Runtime mode and transient BYOK controls */
+.runtime-banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-left-width: 4px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.runtime-banner-public {
+  border-left-color: var(--color-success);
+}
+
+.runtime-banner-local {
+  border-left-color: var(--color-primary);
+}
+
+.runtime-banner strong {
+  color: var(--color-text);
+}
+
+.capability-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  font-size: var(--font-size-xs);
+}
+
+.experience-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  border: 0;
+}
+
+.experience-selector legend {
+  width: 100%;
+  margin-bottom: var(--space-2);
+  font-weight: 600;
+}
+
+.experience-option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  cursor: pointer;
+}
+
+.experience-option.disabled {
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.security-notice {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-warning-light, #fff7df);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.byok-field {
+  display: grid;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.byok-field label,
+.task-composer > label {
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+}
+
+.byok-field p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
+
+.task-composer {
+  margin-bottom: var(--space-4);
+}
+
+.task-composer h2 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--font-size-lg);
+}
+
+.example-run {
+  margin-top: var(--space-3);
+}
+
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
+
+.completion-note {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+}
+
+.feedback-summary {
+  margin-top: var(--space-4);
+}
+
+.runtime-load-error {
+  max-width: 540px;
+  margin: 10vh auto;
+  padding: var(--space-5);
+  text-align: center;
+}

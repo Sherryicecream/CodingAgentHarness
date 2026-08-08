@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export interface SSEEvent {
   type: string;
@@ -6,75 +6,113 @@ export interface SSEEvent {
   timestamp: string;
 }
 
-export function generateSessionId(): string {
-  return `session_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-}
-
-export function useSSE(sessionId: string | null) {
+export function useSSE() {
   const [events, setEvents] = useState<SSEEvent[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
-  const connectionResolveRef = useRef<(() => void) | null>(null);
-  const connectionPromiseRef = useRef<Promise<void> | null>(null);
+  const pendingRejectRef = useRef<((error: Error) => void) | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
 
-  useEffect(() => {
-    if (!sessionId) return;
+  const clearPending = useCallback(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = null;
+    pendingRejectRef.current = null;
+  }, []);
 
+  const close = useCallback(() => {
+    const source = eventSourceRef.current;
+    eventSourceRef.current = null;
+    source?.close();
+    pendingRejectRef.current?.(new Error('SSE_CONNECTION_CLOSED'));
+    clearPending();
+    if (mountedRef.current) setIsConnected(false);
+  }, [clearPending]);
+
+  const connect = useCallback((sessionId: string, timeoutMs = 5_000): Promise<void> => {
+    close();
     setEvents([]);
     setError(null);
     setIsConnected(false);
 
-    // Create a promise that resolves when SSE connects
-    connectionPromiseRef.current = new Promise<void>((resolve) => {
-      connectionResolveRef.current = resolve;
+    const source = new EventSource(`/api/agent/stream/${encodeURIComponent(sessionId)}`);
+    eventSourceRef.current = source;
+
+    return new Promise<void>((resolve, reject) => {
+      let opened = false;
+      let settled = false;
+      const settle = (failure?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearPending();
+        if (failure) reject(failure);
+        else resolve();
+      };
+      pendingRejectRef.current = (failure) => settle(failure);
+      timerRef.current = setTimeout(() => {
+        if (eventSourceRef.current === source) {
+          eventSourceRef.current = null;
+          source.close();
+        }
+        if (mountedRef.current) {
+          setError('实时连接超时，请重试。');
+          setIsConnected(false);
+        }
+        settle(new Error('SSE_CONNECTION_TIMEOUT'));
+      }, timeoutMs);
+
+      source.onopen = () => {
+        if (eventSourceRef.current !== source) return;
+        opened = true;
+        if (mountedRef.current) setIsConnected(true);
+        settle();
+      };
+
+      source.onmessage = (message) => {
+        if (eventSourceRef.current !== source) return;
+        let parsed: SSEEvent;
+        try {
+          parsed = JSON.parse(message.data) as SSEEvent;
+        } catch {
+          if (mountedRef.current) setError('收到无法解析的实时事件。');
+          return;
+        }
+        if (mountedRef.current) {
+          setEvents((previous) => [...previous, parsed]);
+          if (parsed.type === 'error') setError('运行失败，请检查输入后重试。');
+        }
+        if (parsed.type === 'complete' || parsed.type === 'error') {
+          eventSourceRef.current = null;
+          source.close();
+          if (mountedRef.current) setIsConnected(false);
+        }
+      };
+
+      source.onerror = () => {
+        if (eventSourceRef.current !== source) return;
+        eventSourceRef.current = null;
+        source.close();
+        if (mountedRef.current) {
+          setError(opened ? '实时连接已中断，请重试。' : '无法建立实时连接，请重试。');
+          setIsConnected(false);
+        }
+        if (!opened) settle(new Error('SSE_CONNECTION_FAILED'));
+      };
     });
+  }, [clearPending, close]);
 
-    const es = new EventSource(`/api/agent/stream/${sessionId}`);
-    eventSourceRef.current = es;
-
-    es.onopen = () => {
-      setIsConnected(true);
-      connectionResolveRef.current?.();
-      connectionResolveRef.current = null;
-    };
-
-    es.onmessage = (event) => {
-      const parsed = JSON.parse(event.data);
-      setEvents(prev => [...prev, parsed]);
-      if (parsed.type === 'error') {
-        setError(parsed.data?.message || '发生了一个错误');
-      }
-      if (parsed.type === 'complete') {
-        es.close();
-        setIsConnected(false);
-      }
-    };
-
-    es.onerror = () => {
-      if (es.readyState === EventSource.CLOSED) {
-        setIsConnected(false);
-      }
-    };
-
+  useEffect(() => {
+    mountedRef.current = true;
     return () => {
-      es.close();
-      setIsConnected(false);
-      connectionPromiseRef.current = null;
-      connectionResolveRef.current = null;
+      mountedRef.current = false;
+      const source = eventSourceRef.current;
+      eventSourceRef.current = null;
+      source?.close();
+      pendingRejectRef.current?.(new Error('SSE_COMPONENT_UNMOUNTED'));
+      clearPending();
     };
-  }, [sessionId]);
+  }, [clearPending]);
 
-  /** Wait for the SSE connection to be established (use after setting sessionId) */
-  const waitForConnection = async (timeoutMs = 3000): Promise<boolean> => {
-    const promise = connectionPromiseRef.current;
-    if (!promise) return false;
-    const result = await Promise.race([
-      promise.then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs)),
-    ]);
-    return result;
-  };
-
-  return { events, isConnected, error, waitForConnection };
+  return { events, isConnected, error, connect, close };
 }
