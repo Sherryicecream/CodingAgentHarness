@@ -106,7 +106,33 @@
   - `session.ts` — 未找到会话消息中文化
 - **状态:** 完成
 
-## 2026-08-07 — 收尾阶段：代码审查 + 创建回溯分支与 PR
+## 2026-08-08 — 公开 API 安全模式（Phase 10）
+- **Tasks:** 1-8 (Public API Security)
+- **Skills:** superpowers:brainstorming, superpowers:writing-plans, superpowers:test-driven-development, superpowers:subagent-driven-development, superpowers:requesting-code-review, superpowers:verification-before-completion
+- **Worktree:** `D:\CodingAgentHarness\.worktrees\public-api-security`
+- **Branch:** `codex/public-api-security`
+- **Base:** `origin/master / 4ab2b9d`
+- **产出:**
+  - Task 1: Injectable app test harness (`c35d31c`)
+  - Task 2: Policy-owned tool registries (`ea48b22`)
+  - Task 3: Server-owned workspaces and session registry (`b19709a`)
+  - Task 4: Safe public API boundaries (`07172ac`)
+  - Task 5: Transient BYOK credentials (`f608d95`)
+  - Task 6: Deterministic public demo (`746fde5`)
+  - Task 7: Public/local mode UI and in-memory BYOK (`87ec31a`)
+  - Task 7 fix round 1: Lifecycle hardening, allowlist projection, arbitrary-format sentinel (`pending`)
+  - Task 8: Documentation and final verification (`pending`)
+- **关键决策:**
+  - Express 重构为可注入 app 工厂，支持测试模式覆盖
+  - 工具注册表由 RuntimePolicy 拥有，public 模式不注册 Shell/Git/进程工具
+  - Session 由服务端创建和拥有，客户端不生成 session ID 或选择 workingDir
+  - BYOK Key 仅存在于浏览器组件内存和活跃请求/适配器调用图，永不持久化
+  - 公开演示使用确定性进程内场景运行器，不调用真实 LLM 或子进程
+  - 公开模式 UI 使用结构化 allowlist 投影而非正则替换，确保任意格式输入不回显
+  - 生命周期控制使用 runGeneration 模式，确保卸载/切换后迟到响应被丢弃
+- **测试数:** 284 核心 + 175 服务端 = 459 测试
+- **状态:** Tasks 1-6 完成，Task 7 修复轮 1 完成，Task 8 完成
+- **学到的教训:** 安全关键功能需要形式化生命周期管理（generation 计数器 + 挂载守卫 + AbortController 三重保障），仅靠 mounted ref 不足以防止迟到异步操作
 - **Tasks:** 代码审查（4 个严重问题修复）、回溯分支/PR 创建、AGENT_LOG.md 补充
 - **Skills:** superpowers:requesting-code-review（代码审查）
 - **产出:** 修复 4 个严重问题 | 为每个 Phase 创建回溯分支与 PR | 文档补充
@@ -131,3 +157,12 @@
   - `phase-8-server-frontend` → PR #8
   - `phase-9-finalization` → PR #9
 - **学到的教训:** 开发初期应使用 git worktree（`git worktree add`）隔离各 Phase 的工作区，避免 master 线性历史导致无法生成独立 PR。本项目的回溯 PR 虽然创建成功，但 cherry-pick 改变了 commit hash，丢失了原始 commit 与 GitHub 的关联。建议在 AI4SE 期末项目中引以为鉴，开发时主动使用 worktree。
+
+## 2026-08-08 — Session status 修复（Phase 10 收尾）
+- **Commit:** `2bd85c3`
+- **问题:** `AgentLoop.buildSession()` 将 `'max_iterations'` 直接 cast 为 `Session['status']`，导致会话保存 `status: 'max_iterations'`（非有效值），SessionHistory 徽章显示"运行中"而非"已完成"
+- **修复:**
+  - Core: `buildSession()` 中将 `'max_iterations'` 映射为 `'completed'`
+  - UI: `SessionHistory.tsx` 增加对 `'max_iterations'` 的 fallback 处理
+- **测试验证:** 450+ 测试通过，确认会话状态正确保存为 `'completed'`
+- **状态:** 完成

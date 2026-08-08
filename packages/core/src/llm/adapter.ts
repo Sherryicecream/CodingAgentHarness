@@ -7,5 +7,5 @@ import { AgentContext, AgentResponse } from '../types.js';
  * runs deterministically without network calls.
  */
 export interface LLMAdapter {
-  sendMessage(context: AgentContext): Promise<AgentResponse>;
+  sendMessage(context: AgentContext, signal?: AbortSignal): Promise<AgentResponse>;
 }

@@ -1,32 +1,34 @@
-import express from 'express';
-import cors from 'cors';
-import { agentRouter } from './routes/agent.js';
-import { sessionRouter } from './routes/session.js';
-import { configRouter } from './routes/config.js';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createApp, type AppOptions, type HarnessApp } from './app.js';
+import { resolveRuntimePolicy } from './security/runtime-policy.js';
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+export const startServer = async (): Promise<HarnessApp> => {
+  const policy = resolveRuntimePolicy(process.env.HARNESS_MODE);
+  let localOptions: Pick<AppOptions, 'credentialStore' | 'sessionStore'> = {};
+  if (policy.mode === 'local') {
+    const [{ createCredentialStore }, { createSessionStore }] = await Promise.all([
+      import('./credential-store.js'),
+      import('@harness/core'),
+    ]);
+    localOptions = {
+      credentialStore: createCredentialStore(),
+      sessionStore: createSessionStore('.harness-sessions'),
+    };
+  }
+  const app = createApp({ mode: policy.mode, ...localOptions });
+  const port = process.env.PORT ? Number(process.env.PORT) : 3000;
+  const host = process.env.HOST || '127.0.0.1';
+  app.listen(port, host, () => {
+    console.log(`Harness server started: http://${host}:${port}`);
+  });
+  return app;
+};
 
-// API routes
-app.use('/api/agent', agentRouter);
-app.use('/api/sessions', sessionRouter);
-app.use('/api/config', configRouter);
-
-// Health check
-app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
-
-// In production, serve the built frontend
-if (process.env.NODE_ENV === 'production') {
-  app.use(express.static('dist/client'));
-  app.get('*', (_req, res) => {
-    res.sendFile('dist/client/index.html', { root: '.' });
+const entryPath = process.argv[1];
+if (entryPath && resolve(entryPath) === resolve(fileURLToPath(import.meta.url))) {
+  void startServer().catch((error: unknown) => {
+    console.error('Harness server failed to start', error);
+    process.exitCode = 1;
   });
 }
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Harness 服务已启动：http://localhost:${PORT}`);
-});
-
-export default app;

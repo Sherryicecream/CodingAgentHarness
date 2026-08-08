@@ -31,6 +31,27 @@ describe('DeepSeekAdapter', () => {
     nock.cleanAll();
   });
 
+  it('passes an AbortSignal to fetch so an in-flight provider request can be cancelled', async () => {
+    const adapter = new DeepSeekAdapter({ apiKey: 'test-key' });
+    const controller = new AbortController();
+    nock('https://api.deepseek.com')
+      .post('/v1/chat/completions')
+      .reply(200, { choices: [{ message: { content: 'should not arrive' } }] });
+    controller.abort();
+
+    await expect(adapter.sendMessage(makeContext(), controller.signal))
+      .rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('cannot issue another request after its credential resource is disposed', async () => {
+    const adapter = new DeepSeekAdapter({ apiKey: 'test-key' });
+
+    adapter.dispose();
+
+    await expect(adapter.sendMessage(makeContext()))
+      .rejects.toThrow('LLM adapter is no longer available');
+  });
+
   it('default model is deepseek-chat', () => {
     const adapter = new DeepSeekAdapter({ apiKey: 'test-key' });
     // We verify the default by checking that a nock for the default URL works

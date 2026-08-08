@@ -1,299 +1,392 @@
-import React, { useState } from 'react';
-import { useSSE, generateSessionId } from '../hooks/useSSE.js';
+import React, { useEffect, useRef, useState } from 'react';
+import type { RuntimeExperience, RuntimeSession } from '../hooks/useRuntimeInfo.js';
+import { useSSE } from '../hooks/useSSE.js';
 import { ToolCallCard } from './ToolCallCard.js';
 import { GuardrailDialog } from './GuardrailDialog.js';
 import { FeedbackTimeline } from './FeedbackTimeline.js';
 
-const EXAMPLE_TASKS = [
-  { title: '斐波那契数列', desc: '写一个 fibonacci.ts 文件，实现斐波那契数列函数，并读出文件内容' },
-  { title: '简易计算器', desc: '创建 calculator.ts，实现加减乘除四个函数，用 node 运行测试' },
-  { title: '文件排序', desc: '写一个 sort.ts 文件，实现冒泡排序和快速排序函数，并运行测试' },
-  { title: '自定义任务', desc: '输入你自己的编程任务...' },
-];
+interface BrowserSecurityInfo {
+  isSecureContext: boolean;
+  hostname: string;
+}
 
-export function ChatPanel() {
+interface ChatPanelProps {
+  runtimeInfo: RuntimeSession;
+  acquireSession(): Promise<RuntimeSession>;
+}
+
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
+export const isByokBrowserAllowed = (info: BrowserSecurityInfo): boolean => (
+  info.isSecureContext || LOOPBACK_HOSTS.has(info.hostname.toLowerCase())
+);
+
+const experienceLabel = (experience: RuntimeExperience): string => {
+  if (experience === 'demo') return '安全演示';
+  if (experience === 'byok') return '使用自己的 API Key';
+  return '本地服务器凭据';
+};
+
+const defaultExperience = (runtime: RuntimeSession): RuntimeExperience => (
+  runtime.mode === 'local' && runtime.capabilities.allowedExperiences.includes('server')
+    ? 'server'
+    : 'demo'
+);
+
+const EXAMPLE_TASK = '创建一个安全的 TypeScript 示例文件，并展示护栏与反馈修正流程';
+
+const PUBLIC_TOOL_NAMES = new Set(['read_file', 'write_file', 'list_files']);
+const PUBLIC_RISK_LEVELS = new Set(['safe', 'moderate', 'dangerous']);
+const PUBLIC_TOOL_STAGES = new Set(['initial_write', 'dangerous_action_blocked', 'corrected_write']);
+const PUBLIC_TOOL_STATUSES = new Set(['pending', 'done', 'failed']);
+const PUBLIC_FEEDBACK_SUMMARIES = new Set(['1 test failure(s) detected.']);
+
+const allowlistedText = (
+  value: unknown,
+  allowed: ReadonlySet<string>,
+  fallback = '',
+): string => typeof value === 'string' && allowed.has(value) ? value : fallback;
+
+const publicToolCallSummary = (data: any) => ({
+  name: allowlistedText(data?.name, PUBLIC_TOOL_NAMES, 'file_tool'),
+  riskLevel: allowlistedText(data?.riskLevel, PUBLIC_RISK_LEVELS, 'safe'),
+  stage: allowlistedText(data?.stage, PUBLIC_TOOL_STAGES),
+  status: allowlistedText(data?.status, PUBLIC_TOOL_STATUSES),
+  result: {
+    success: data?.result?.success === true,
+    ...(data?.result?.success === true ? {} : { error: 'TOOL_CALL_FAILED' }),
+  },
+});
+
+const publicFeedbackSummary = (value: unknown): string | null => {
+  const summary = allowlistedText(value, PUBLIC_FEEDBACK_SUMMARIES);
+  return summary || null;
+};
+
+export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
   const [task, setTask] = useState('');
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [experience, setExperience] = useState<RuntimeExperience>(() => defaultExperience(runtimeInfo));
+  const [apiKey, setApiKey] = useState('');
   const [running, setRunning] = useState(false);
-  const { events, isConnected, error, waitForConnection } = useSSE(sessionId);
+  const [runError, setRunError] = useState<string | null>(null);
+  const activeRun = useRef(false);
+  const mounted = useRef(true);
+  const runGeneration = useRef(0);
+  const runAbortController = useRef<AbortController | null>(null);
+  const { events, isConnected, error: streamError, connect, close } = useSSE();
+  const byokAllowed = isByokBrowserAllowed({
+    isSecureContext: window.isSecureContext === true,
+    hostname: window.location.hostname,
+  });
 
-  const handleSubmit = async (customTask?: string) => {
-    const finalTask = customTask || task;
-    if (!finalTask.trim()) return;
-    setRunning(true);
-    setTask(finalTask);
-
-    const sid = generateSessionId();
-    setSessionId(sid);
-
-    // Wait for SSE connection to establish before sending the POST request
-    // This ensures events are not lost due to the race between SSE and POST
-    await waitForConnection(5000);
-
-    try {
-      const res = await fetch('/api/agent/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task: finalTask, workingDir: '/tmp/harness-workspace', sessionId: sid }),
-      });
-
-      if (!res.ok) {
-        setRunning(false);
-      }
-    } catch {
-      setRunning(false);
-    }
-  };
-
-  const lastEvent = events[events.length - 1];
+  const lastEvent = events.at(-1);
   const isComplete = lastEvent?.type === 'complete';
-  const hasStarted = events.length > 0;
-  const feedbackRuns = events
-    .filter(e => e.type === 'feedback')
-    .map(e => e.data);
+  const feedbackRuns = events.filter((event) => event.type === 'feedback').map((event) => event.data);
 
-  // 任务完成或出错时，恢复输入框可用
-  React.useEffect(() => {
+  useEffect(() => {
+    const allowed = runtimeInfo.capabilities.allowedExperiences;
+    if (!allowed.includes(experience)) {
+      setExperience(defaultExperience(runtimeInfo));
+      setApiKey('');
+      close();
+    }
+  }, [close, experience, runtimeInfo]);
+
+  useEffect(() => {
     if (lastEvent?.type === 'complete' || lastEvent?.type === 'error') {
+      activeRun.current = false;
       setRunning(false);
+      setApiKey('');
     }
   }, [lastEvent]);
 
+  useEffect(() => {
+    if (!streamError) return;
+    activeRun.current = false;
+    setRunning(false);
+    setApiKey('');
+  }, [streamError]);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      runGeneration.current += 1;
+      runAbortController.current?.abort();
+      runAbortController.current = null;
+      activeRun.current = false;
+      close();
+    };
+  }, [close]);
+
+  const changeExperience = (next: RuntimeExperience) => {
+    if (running || next === experience) return;
+    runGeneration.current += 1;
+    runAbortController.current?.abort();
+    runAbortController.current = null;
+    setApiKey('');
+    setRunError(null);
+    setSessionId(null);
+    close();
+    setExperience(next);
+  };
+
+  const stopStarting = () => {
+    activeRun.current = false;
+    setRunning(false);
+    setApiKey('');
+    close();
+  };
+
+  const handleSubmit = async (requestedTask?: string) => {
+    const finalTask = (requestedTask ?? task).trim();
+    if (!finalTask || activeRun.current) return;
+    if (experience === 'byok' && (!byokAllowed || !apiKey)) return;
+
+    activeRun.current = true;
+    const generation = runGeneration.current + 1;
+    runGeneration.current = generation;
+    const abortController = new AbortController();
+    runAbortController.current = abortController;
+    setRunning(true);
+    setRunError(null);
+    setTask(finalTask);
+
+    try {
+      const session = await acquireSession();
+      if (!mounted.current || runGeneration.current !== generation) return;
+      if (!session.capabilities.allowedExperiences.includes(experience)) {
+        throw new Error('EXPERIENCE_NOT_ALLOWED');
+      }
+      setSessionId(session.sessionId);
+      await connect(session.sessionId, 5_000);
+      if (!mounted.current || runGeneration.current !== generation) return;
+
+      const request: {
+        sessionId: string;
+        task: string;
+        mode: RuntimeExperience;
+        apiKey?: string;
+      } = {
+        sessionId: session.sessionId,
+        task: finalTask,
+        mode: experience,
+      };
+      if (experience === 'byok') request.apiKey = apiKey;
+
+      const response = await fetch('/api/agent/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+        signal: abortController.signal,
+      });
+      if (!mounted.current || runGeneration.current !== generation) return;
+      setApiKey('');
+      if (!response.ok) throw new Error('RUN_START_FAILED');
+    } catch {
+      if (!mounted.current || runGeneration.current !== generation) return;
+      setRunError('无法启动运行，请重试。');
+      stopStarting();
+    } finally {
+      if (runAbortController.current === abortController) {
+        runAbortController.current = null;
+      }
+    }
+  };
+
   return (
-    <div className="chat-panel">
-      {/* 输入区域 */}
-      <div className="chat-input-row">
-        <input
-          className="input"
-          value={task}
-          onChange={e => setTask(e.target.value)}
-          placeholder="输入编程任务，例如：写一个 fibonacci 函数"
-          disabled={running}
-          onKeyDown={e => e.key === 'Enter' && handleSubmit()}
-        />
-        <button
-          className="btn btn-primary"
-          onClick={() => handleSubmit()}
-          disabled={running || !task.trim()}
-        >
-          {running ? '运行中...' : '发送'}
-        </button>
-      </div>
-
-      {/* 连接状态 */}
-      {isConnected && !isComplete && (
-        <div style={{ fontSize: 12, color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span className="status-dot status-dot-pass"></span>
-          已连接 — 代理正在工作
-        </div>
-      )}
-
-      {error && <div className="event-error">{error}</div>}
-
-      {/* 初始状态：欢迎引导 + 示例任务 */}
-      {!hasStarted && !running && (
+    <main className="chat-panel">
+      <section className={`runtime-banner runtime-banner-${runtimeInfo.mode}`} aria-live="polite">
         <div>
-          {/* 欢迎区域 */}
-          <div className="welcome-card">
-            <div className="welcome-header">
-              <div className="welcome-icon">H</div>
-              <div>
-                <div className="welcome-title">Harness — 编码智能体工作台</div>
-                <div className="welcome-subtitle">
-                  一个自带<strong>反馈闭环</strong>的 AI 编程助手。输入任务，Agent 自动完成编码、测试、修正。
-                </div>
-              </div>
-            </div>
+          <strong>{runtimeInfo.mode === 'public' ? '公开安全模式' : '本地可信模式'}</strong>
+          <span>
+            {runtimeInfo.mode === 'public'
+              ? ' 仅提供隔离文件工具；不会执行 Shell、Git 或进程测试。'
+              : ' 可使用服务器凭据和完整的可信本地工具。'}
+          </span>
+        </div>
+        <div className="capability-list" aria-label="服务器授予的能力">
+          <span>进程工具：{runtimeInfo.capabilities.allowProcessTools ? '启用' : '禁用'}</span>
+          <span>服务器凭据：{runtimeInfo.capabilities.allowServerCredentials ? '启用' : '禁用'}</span>
+          <span>会话到期：{new Date(runtimeInfo.expiresAt).toLocaleTimeString()}</span>
+        </div>
+      </section>
 
-            {/* 工作原理 */}
-            <div className="welcome-section">
-              <div className="welcome-section-title">📋 工作原理</div>
-              <div className="flow-steps">
-                <div className="flow-step">
-                  <div className="flow-step-number">1</div>
-                  <div className="flow-step-content">
-                    <div className="flow-step-label">输入任务</div>
-                    <div className="flow-step-desc">用自然语言描述编程任务</div>
-                  </div>
-                  <div className="flow-step-arrow">→</div>
-                </div>
-                <div className="flow-step">
-                  <div className="flow-step-number">2</div>
-                  <div className="flow-step-content">
-                    <div className="flow-step-label">AI 编码</div>
-                    <div className="flow-step-desc">Agent 自动读写文件、执行命令</div>
-                  </div>
-                  <div className="flow-step-arrow">→</div>
-                </div>
-                <div className="flow-step">
-                  <div className="flow-step-number">3</div>
-                  <div className="flow-step-content">
-                    <div className="flow-step-label">自动测试</div>
-                    <div className="flow-step-desc">运行测试并分析失败原因</div>
-                  </div>
-                  <div className="flow-step-arrow">→</div>
-                </div>
-                <div className="flow-step">
-                  <div className="flow-step-number">4</div>
-                  <div className="flow-step-content">
-                    <div className="flow-step-label">反馈修正</div>
-                    <div className="flow-step-desc">测试失败则自动修复，循环直到通过</div>
-                  </div>
-                </div>
-              </div>
-            </div>
+      <fieldset className="experience-selector" disabled={running}>
+        <legend>体验方式</legend>
+        {runtimeInfo.capabilities.allowedExperiences.map((option) => {
+          const disabled = option === 'byok' && (!runtimeInfo.capabilities.allowByok || !byokAllowed);
+          return (
+            <label key={option} className={`experience-option ${disabled ? 'disabled' : ''}`}>
+              <input
+                type="radio"
+                name="experience"
+                value={option}
+                checked={experience === option}
+                disabled={disabled}
+                onChange={() => changeExperience(option)}
+              />
+              <span>{experienceLabel(option)}</span>
+            </label>
+          );
+        })}
+      </fieldset>
 
-            {/* 核心功能 */}
-            <div className="welcome-section">
-              <div className="welcome-section-title">🔧 核心功能</div>
-              <div className="feature-grid">
-                <div className="feature-item">
-                  <div className="feature-icon">🤖</div>
-                  <div>
-                    <div className="feature-label">自动编码与测试</div>
-                    <div className="feature-desc">输入任务，Agent 自动完成代码编写并运行测试验证</div>
-                  </div>
-                </div>
-                <div className="feature-item">
-                  <div className="feature-icon">🔄</div>
-                  <div>
-                    <div className="feature-label">智能反馈闭环</div>
-                    <div className="feature-desc">测试失败时自动分析原因、分类错误、生成修复建议</div>
-                  </div>
-                </div>
-                <div className="feature-item">
-                  <div className="feature-icon">🛡️</div>
-                  <div>
-                    <div className="feature-label">安全护栏</div>
-                    <div className="feature-desc">危险操作（如删除文件、强制推送）需人工确认后才执行</div>
-                  </div>
-                </div>
-                <div className="feature-item">
-                  <div className="feature-icon">📜</div>
-                  <div>
-                    <div className="feature-label">历史回顾</div>
-                    <div className="feature-desc">所有会话完整记录，可随时查看决策过程和修正记录</div>
-                  </div>
-                </div>
-              </div>
-            </div>
+      {!byokAllowed && runtimeInfo.capabilities.allowByok && (
+        <p className="security-notice" role="note">
+          使用自己的 API Key 需要 HTTPS；仅 localhost、127.0.0.1 和 ::1 可在 HTTP 下开发调试。
+        </p>
+      )}
 
-            {/* 文件位置 */}
-            <div className="welcome-section">
-              <div className="welcome-section-title">📁 文件位置</div>
-              <div className="welcome-note">
-                <p>Agent 生成的文件默认保存在工作目录：</p>
-                <code className="welcome-code">/tmp/harness-workspace/</code>
-                <p style={{ marginTop: 8, fontSize: 13, color: 'var(--color-text-secondary)' }}>
-                  你可以在 Agent 运行过程中实时查看每一步的工具调用和文件操作。如需更改工作目录，请联系管理员修改配置。
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* 快速开始 */}
-          <h3 className="section-title" style={{ marginTop: 24 }}>💡 快速开始</h3>
-          <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginBottom: 12 }}>
-            选择一个示例任务，或在上方输入框输入自定义任务
+      {experience === 'byok' && byokAllowed && (
+        <div className="byok-field">
+          <label htmlFor="deepseek-api-key">DeepSeek API Key</label>
+          <input
+            id="deepseek-api-key"
+            className="input"
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            value={apiKey}
+            onChange={(event) => setApiKey(event.target.value)}
+            disabled={running}
+            aria-describedby="byok-help"
+          />
+          <p id="byok-help">
+            Key 仅保留在当前组件内存中，通过本次 HTTPS 请求发送；不会写入浏览器或服务器配置。
           </p>
-          <div className="example-grid">
-            {EXAMPLE_TASKS.map((ex, i) => (
-              <div
-                key={i}
-                className="card example-card"
-                onClick={() => {
-                  if (ex.title !== '自定义任务') {
-                    handleSubmit(ex.desc);
-                  } else {
-                    setTask('');
-                  }
-                }}
-              >
-                <div className="example-card-title">{ex.title}</div>
-                <div className="example-card-desc">{ex.desc}</div>
-              </div>
-            ))}
-          </div>
         </div>
       )}
 
-      {/* 事件流 */}
-      <div className="event-stream">
-        {events.map((e, i) => {
-          if (e.type === 'tool_call') {
-            return <ToolCallCard key={i} data={e.data} />;
+      <section className="task-composer" aria-labelledby="task-heading">
+        <h2 id="task-heading">开始一个编码任务</h2>
+        <label htmlFor="task-input">任务</label>
+        <div className="chat-input-row">
+          <input
+            id="task-input"
+            className="input"
+            value={task}
+            onChange={(event) => setTask(event.target.value)}
+            placeholder="描述你希望 Agent 完成的编码任务"
+            disabled={running}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') void handleSubmit();
+            }}
+          />
+          <button
+            className="btn btn-primary"
+            onClick={() => void handleSubmit()}
+            disabled={running || !task.trim() || (experience === 'byok' && !apiKey)}
+          >
+            {running ? '运行中…' : '开始运行'}
+          </button>
+        </div>
+        {!events.length && !running && (
+          <button className="btn btn-secondary example-run" onClick={() => void handleSubmit(EXAMPLE_TASK)}>
+            运行推荐示例
+          </button>
+        )}
+      </section>
+
+      {isConnected && !isComplete && (
+        <div className="connection-status">
+          <span className="status-dot status-dot-pass" />
+          实时连接已建立，Agent 正在工作
+        </div>
+      )}
+      {(runError || streamError) && <div className="event-error" role="alert">{runError ?? streamError}</div>}
+
+      <section className="event-stream" aria-label="运行事件">
+        {events.map((event, index) => {
+          if (event.type === 'tool_call') {
+            const displayData = runtimeInfo.mode === 'public'
+              ? publicToolCallSummary(event.data)
+              : event.data;
+            return <ToolCallCard key={index} data={displayData} />;
           }
-          if (e.type === 'guardrail') {
-            return <GuardrailDialog key={i} data={e.data} sessionId={sessionId!} />;
+          if (event.type === 'guardrail' && runtimeInfo.mode === 'public') {
+            return <div key={index} className="event-message">操作已被安全策略拦截。</div>;
           }
-          if (e.type === 'feedback') {
-            const fb = e.data;
+          if (event.type === 'guardrail' && sessionId) {
+            return <GuardrailDialog key={index} data={event.data} sessionId={sessionId} />;
+          }
+          if (event.type === 'feedback') {
+            const feedback = event.data;
+            if (runtimeInfo.mode === 'public') {
+              const safeSummary = publicFeedbackSummary(feedback.actionableFix?.summary);
+              return (
+                <div key={index} className="event-message">
+                  <strong>反馈：</strong>{feedback.status === 'pass' ? '验证通过' : '验证失败'}
+                  {safeSummary && <div>{safeSummary}</div>}
+                </div>
+              );
+            }
             return (
-              <div key={i} className="event-message" style={{ borderLeft: `3px solid ${fb.status === 'pass' ? 'var(--color-success)' : 'var(--color-danger)'}` }}>
-                <strong>反馈：</strong> {fb.status === 'pass' ? '✅ 全部测试通过' : `❌ ${fb.failures?.length || 0} 个测试失败`}
-                {fb.failures?.map((f: any, j: number) => (
-                  <div key={j} style={{ fontSize: 12, marginTop: 4, color: 'var(--color-text-secondary)' }}>
-                    {f.file}:{f.line} — {f.message} ({f.type === 'syntax' ? '语法' : f.type === 'assertion' ? '断言' : f.type === 'timeout' ? '超时' : '运行时'})
+              <div key={index} className="event-message">
+                <strong>反馈：</strong>
+                {feedback.status === 'pass'
+                  ? '✅ 全部测试通过'
+                  : `❌ ${feedback.failures?.length || 0} 个测试失败`}
+                {feedback.failures?.map((failure: any, failureIndex: number) => (
+                  <div key={failureIndex} className="feedback-failure">
+                    {failure.file}:{failure.line} — {failure.message} (
+                    {failure.type === 'syntax'
+                      ? '语法'
+                      : failure.type === 'assertion'
+                        ? '断言'
+                        : failure.type === 'timeout'
+                          ? '超时'
+                          : '运行时'}
+                    )
                   </div>
                 ))}
+                {feedback.actionableFix?.summary && <div>{feedback.actionableFix.summary}</div>}
               </div>
             );
           }
-          if (e.type === 'loop_step') {
+          if (event.type === 'loop_step') {
             return (
-              <div key={i} className="event-message">
-                <strong>步骤 {e.data.iteration ?? ''}:</strong> {e.data.content || e.data.phase}
+              <div key={index} className="event-message">
+                <strong>步骤：</strong>
+                {runtimeInfo.mode === 'public'
+                  ? allowlistedText(event.data?.stage, PUBLIC_TOOL_STAGES, '安全执行中')
+                  : event.data?.content ?? event.data?.stage ?? event.data?.phase}
               </div>
             );
           }
-          if (e.type === 'error') {
-            return (
-              <div key={i} className="event-error">
-                <strong>错误：</strong> {e.data?.message || '未知错误'}
-                <div style={{ fontSize: 12, marginTop: 4, color: 'var(--color-text-muted)' }}>
-                  代理遇到错误。请检查 API Key 是否有效，或前往 Config 页面重新配置。
-                </div>
-              </div>
-            );
+          if (event.type === 'error') {
+            return <div key={index} className="event-error">运行失败，请稍后重试。</div>;
           }
-          if (e.type === 'complete') {
-            return (
-              <div key={i} className="event-complete">
-                ✅ 任务完成
-              </div>
-            );
+          if (event.type === 'complete') {
+            return <div key={index} className="event-complete">✓ 任务完成</div>;
           }
+          const content = event.data?.content ?? event.type;
           return (
-            <div key={i} className="event-message">
-              {e.data?.content || e.type}
+            <div key={index} className="event-message">
+              {runtimeInfo.mode === 'public' ? '收到安全运行事件。' : content}
             </div>
           );
         })}
-      </div>
+      </section>
 
-      {/* 完成后的提示 */}
       {isComplete && (
-        <div className="card" style={{ fontSize: 13, color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
-          <strong>📍 文件位置：</strong>
-          <br />
-          代理生成的文件保存在工作目录：<code>/tmp/harness-workspace/</code>
-          <br />
-          如需更改工作目录，请联系管理员修改配置。
+        <div className="card completion-note">
+          本次文件保存在服务器分配的隔离临时工作区中；浏览器不能选择或查看服务器路径。
         </div>
       )}
 
-      {/* 反馈闭环时间线 */}
       {isComplete && feedbackRuns.length > 0 && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <FeedbackTimeline runs={feedbackRuns.map((fb: any, idx: number) => ({
-            iteration: idx,
-            testResult: fb.status === 'pass' ? 'pass' as const : 'fail' as const,
-            failureCount: fb.failures?.length || 0,
+        <div className="card feedback-summary">
+          <FeedbackTimeline runs={feedbackRuns.map((feedback: any, index: number) => ({
+            iteration: index,
+            testResult: feedback.status === 'pass' ? 'pass' as const : 'fail' as const,
+            failureCount: feedback.failures?.length ?? 0,
             fixApplied: false,
             timeSpent: 0,
           }))} />
         </div>
       )}
-    </div>
+    </main>
   );
 }

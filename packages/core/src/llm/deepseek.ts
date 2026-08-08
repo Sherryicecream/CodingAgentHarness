@@ -16,6 +16,7 @@ export class DeepSeekAdapter implements LLMAdapter {
   private apiKey: string;
   private model: string;
   private baseUrl: string;
+  private disposed = false;
 
   constructor(options: { apiKey: string; model?: string; baseUrl?: string }) {
     this.apiKey = options.apiKey;
@@ -23,7 +24,10 @@ export class DeepSeekAdapter implements LLMAdapter {
     this.baseUrl = options.baseUrl ?? 'https://api.deepseek.com';
   }
 
-  async sendMessage(context: AgentContext): Promise<AgentResponse> {
+  async sendMessage(context: AgentContext, signal?: AbortSignal): Promise<AgentResponse> {
+    if (this.disposed) {
+      throw new Error('LLM adapter is no longer available');
+    }
     // Build OpenAI-compatible request body
     const body = {
       model: this.model,
@@ -53,14 +57,21 @@ export class DeepSeekAdapter implements LLMAdapter {
       })) : undefined,
     };
 
-    const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(body),
-    });
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${this.apiKey}`,
+    };
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        signal,
+        headers,
+        body: JSON.stringify(body),
+      });
+    } finally {
+      headers.Authorization = '';
+    }
 
     if (!response.ok) {
       const text = await response.text();
@@ -86,5 +97,10 @@ export class DeepSeekAdapter implements LLMAdapter {
       content: message?.content ?? '',
       toolCalls,
     };
+  }
+
+  dispose(): void {
+    this.apiKey = '';
+    this.disposed = true;
   }
 }
