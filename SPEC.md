@@ -316,6 +316,101 @@ interface MemoryEntry {
 4. 日常使用：启动时从密钥链读取 → 注入 LLMAdapter → 运行
 5. 管理命令：`harness config status`（不回显明文）、`harness config update`、`harness config clear`
 
+### 公开/本地安全模式
+
+#### HARNESS_MODE
+
+Harness 通过 `HARNESS_MODE` 环境变量控制运行模式：
+
+- **`public`**（默认）：匿名访问，不暴露任何本地凭据、文件系统、Shell 或 Git 能力。适用于公开演示和受限的 BYOK 使用。
+- **`local`**：完整可信模式，保留所有本地工具、凭据管理和配置功能。
+
+未设置或无效值默认解析为 `public`。
+
+#### 能力模型
+
+服务端下发的能力集来自 `RuntimePolicy`，通过 session 创建响应返回客户端：
+
+```typescript
+interface RuntimeSession {
+  sessionId: string;
+  mode: 'public' | 'local';
+  capabilities: {
+    allowedExperiences: Array<'demo' | 'byok' | 'server'>;
+    allowByok: boolean;
+    allowProcessTools: boolean;
+    allowServerCredentials: boolean;
+  };
+  expiresAt: string;
+}
+```
+
+客户端不得自行推断或启用能力。所有能力由服务端策略决定。
+
+#### 信任边界
+
+- **Session ID**：由服务端生成，客户端不生成或发送 session ID。
+- **工作区**：服务端拥有工作区根目录（`HARNESS_WORKSPACE_ROOT`），客户端不发送 `workingDir`，`workingDir` 被拒绝为未知请求字段。
+- **Key 生命周期**：BYOK Key 仅存在于浏览器组件内存中，通过 HTTPS 请求发送。Key 在以下情况均被清除：
+  - 运行成功完成
+  - 运行失败或发生错误
+  - SSE 连接超时或中断
+  - 用户切换体验模式
+  - 组件卸载
+- Key 不写入 localStorage、sessionStorage、URL、日志、分析工具、全局状态或上下文存储。
+- Key 不回显到验证/错误提示文本中。
+
+#### 公开演示
+
+公开演示使用服务端内置的确定性场景运行器，不调用真实 LLM、不执行子进程：
+- 使用 `createPublicDemoRunner` 在服务端进程内执行
+- 展示安全文件写入、危险操作拦截、护栏反馈修正
+- 所有事件使用结构化 allowlist 投影，确保任意格式用户输入不回显
+
+#### BYOK 安全要求
+
+- 生产环境必须通过 HTTPS 访问
+- `localhost`、`127.0.0.1`、`::1` 等 loopback 地址可在 HTTP 下开发调试
+- 非 HTTPS 非 loopback 环境下 BYOK 禁用，显示 HTTPS 说明
+- DeepSeek 适配器在 run 路径内从请求 Key 构建，不附加到 session 状态
+- 发出值通过 secret-redactor 清理，SSE 红化上下文在 close 时清除
+
+#### 网络流
+
+```
+POST /api/agent/sessions          → { sessionId, mode, capabilities, expiresAt }
+GET  /api/agent/stream/:sessionId → SSE 事件流（等待连接打开后）
+POST /api/agent/run               → { sessionId, task, mode, apiKey? }
+```
+
+严格顺序：session 创建 → SSE 连接 → 运行提交。客户端不生成 session ID，不发送 workingDir。
+
+#### 速率限制
+
+- 默认：20 次运行尝试/小时/IP
+- 默认：2 个并发运行/IP
+- 通过 `RATE_LIMIT_MAX`、`RATE_LIMIT_WINDOW`、`CONCURRENT_MAX` 环境变量覆盖
+- 请求体限制：64 KB JSON
+
+#### 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `HARNESS_MODE` | `public` | 运行模式：`public` 或 `local` |
+| `HARNESS_WORKSPACE_ROOT` | 系统临时目录 | 服务端工作区根目录 |
+| `PORT` | `3000` | HTTP 监听端口 |
+| `HOST` | `0.0.0.0` | HTTP 监听地址 |
+| `DEEPSEEK_API_KEY` | — | 服务端 DeepSeek API Key（本地模式） |
+| `TRUST_PROXY` | `0` | 反向代理信任跳数（用于 HTTPS 检测） |
+| `RATE_LIMIT_MAX` | `20` | 每小时每 IP 最大运行尝试次数 |
+| `RATE_LIMIT_WINDOW` | `3600000` | 速率限制窗口（毫秒） |
+| `CONCURRENT_MAX` | `2` | 每 IP 最大并发运行数 |
+
+#### 威胁模型
+
+- **范围内**：从文件系统窃取凭据、日志泄露、Git 暴露、浏览器 XSS 读取 Key、CSRF 未授权运行
+- **范围外**：内存扫描、内核级攻击、依赖供应链攻击、Windows 同账户恶意进程（非远程公开威胁模型）
+
 ### 分发
 
 | 项目 | 决策 |

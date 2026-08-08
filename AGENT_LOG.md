@@ -106,7 +106,33 @@
   - `session.ts` — 未找到会话消息中文化
 - **状态:** 完成
 
-## 2026-08-07 — 收尾阶段：代码审查 + 创建回溯分支与 PR
+## 2026-08-08 — 公开 API 安全模式（Phase 10）
+- **Tasks:** 1-8 (Public API Security)
+- **Skills:** superpowers:brainstorming, superpowers:writing-plans, superpowers:test-driven-development, superpowers:subagent-driven-development, superpowers:requesting-code-review, superpowers:verification-before-completion
+- **Worktree:** `D:\CodingAgentHarness\.worktrees\public-api-security`
+- **Branch:** `codex/public-api-security`
+- **Base:** `origin/master / 4ab2b9d`
+- **产出:**
+  - Task 1: Injectable app test harness (`c35d31c`)
+  - Task 2: Policy-owned tool registries (`ea48b22`)
+  - Task 3: Server-owned workspaces and session registry (`b19709a`)
+  - Task 4: Safe public API boundaries (`07172ac`)
+  - Task 5: Transient BYOK credentials (`f608d95`)
+  - Task 6: Deterministic public demo (`746fde5`)
+  - Task 7: Public/local mode UI and in-memory BYOK (`87ec31a`)
+  - Task 7 fix round 1: Lifecycle hardening, allowlist projection, arbitrary-format sentinel (`pending`)
+  - Task 8: Documentation and final verification (`pending`)
+- **关键决策:**
+  - Express 重构为可注入 app 工厂，支持测试模式覆盖
+  - 工具注册表由 RuntimePolicy 拥有，public 模式不注册 Shell/Git/进程工具
+  - Session 由服务端创建和拥有，客户端不生成 session ID 或选择 workingDir
+  - BYOK Key 仅存在于浏览器组件内存和活跃请求/适配器调用图，永不持久化
+  - 公开演示使用确定性进程内场景运行器，不调用真实 LLM 或子进程
+  - 公开模式 UI 使用结构化 allowlist 投影而非正则替换，确保任意格式输入不回显
+  - 生命周期控制使用 runGeneration 模式，确保卸载/切换后迟到响应被丢弃
+- **测试数:** 284 核心 + 175 服务端 = 459 测试
+- **状态:** Tasks 1-6 完成，Task 7 修复轮 1 完成，Task 8 进行中
+- **学到的教训:** 安全关键功能需要形式化生命周期管理（generation 计数器 + 挂载守卫 + AbortController 三重保障），仅靠 mounted ref 不足以防止迟到异步操作
 - **Tasks:** 代码审查（4 个严重问题修复）、回溯分支/PR 创建、AGENT_LOG.md 补充
 - **Skills:** superpowers:requesting-code-review（代码审查）
 - **产出:** 修复 4 个严重问题 | 为每个 Phase 创建回溯分支与 PR | 文档补充

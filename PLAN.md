@@ -2352,7 +2352,32 @@ cd packages/core && npm pack --dry-run  # 应显示打包内容
 
 ---
 
-**Phase 9 完成状态：** CLI 可用、Docker/部署配置就绪、文档完整、CI 通过、npm 可发布。
+## Phase 10: Public API Security (Tasks 1–8)
+
+**Goal:** Preserve an anonymously accessible Web UI while replacing the public arbitrary-code-execution boundary with a deterministic demo path and an HTTPS-only BYOK path using restricted tools.
+
+**Architecture:** Refactor Express into an injectable app factory, derive capabilities from a fail-closed runtime policy, issue server-owned sessions and workspaces, and build tool registries exclusively from server policy. Public demo execution uses an in-process scenario runner; public BYOK execution uses a transient DeepSeek adapter with file-only tools; trusted local mode retains the full tool set.
+
+**Worktree:** `D:\CodingAgentHarness\.worktrees\public-api-security`
+**Branch:** `codex/public-api-security`
+**Base:** `origin/master / 4ab2b9d`
+
+**Status:**
+
+| Task | Description | Commit | Status |
+|------|-------------|--------|--------|
+| Task 1 | Injectable app test harness | `c35d31c` | ✅ |
+| Task 2 | Policy-owned tool registries | `ea48b22` | ✅ |
+| Task 3 | Server-owned workspace isolation | `b19709a` | ✅ |
+| Task 4 | Safe public API boundaries | `07172ac` | ✅ |
+| Task 5 | Transient BYOK credentials | `f608d95` | ✅ |
+| Task 6 | Deterministic public demo | `746fde5` | ✅ |
+| Task 7 | Public/local mode UI and in-memory BYOK | `87ec31a` | ✅ (fix round 1 pending) |
+| Task 8 | Documentation and final verification | `pending` | 🔄 |
+
+**Total commits:** 8 tasks + fix rounds, all on `codex/public-api-security`
+
+**Dependencies:** Phase 1-9 (master base)
 
 | Task | Commit | Status |
 |------|--------|--------|
