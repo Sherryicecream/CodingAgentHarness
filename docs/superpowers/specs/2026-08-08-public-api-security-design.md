@@ -88,7 +88,7 @@ Required tests prove:
 
 ## Deployment and documentation
 
-README documents the public/local distinction, HTTPS requirement, capability limitations, environment variables, and BYOK data lifecycle. The Web UI labels the active mode and does not render the key input when the page is not a secure context, except on loopback development. CI runs core tests, server tests, and the production build.
+README documents the public/local distinction, HTTPS requirement, capability limitations, environment variables, and BYOK data lifecycle. The Web UI labels the active mode and does not render the key input when the page is not a secure context, except on loopback development. The root test command includes both core and server tests. Adding a production-build CI step is deferred to the separate Node-version alignment change because the current CI runtime is incompatible with the installed Vite toolchain.
 
 ## Non-goals
 
