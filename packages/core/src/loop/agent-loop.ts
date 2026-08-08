@@ -75,7 +75,7 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
     messages: state.messages,
     toolCalls: state.toolCalls,
     feedbackRuns: state.feedbackRuns,
-    status: status as Session['status'],
+    status: status === 'max_iterations' ? 'completed' : status as Session['status'],
     conclusion: null,
   });
 
