@@ -39,3 +39,6 @@ docs/superpowers/specs/
 
 # Machine-local agent settings
 .claude/settings.local.json
+
+# Superpowers isolated worktrees
+.worktrees/
