@@ -328,6 +328,15 @@ body {
   color: var(--color-danger);
 }
 
+.feedback-failure {
+  margin-top: var(--space-1);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-danger-bg);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+
 /* Tool Call Card */
 .tool-call-card {
   border: 1px solid var(--color-border);

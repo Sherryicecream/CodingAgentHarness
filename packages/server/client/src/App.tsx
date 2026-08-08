@@ -40,12 +40,14 @@ export function App() {
           >
             对话
           </button>
-          <button
-            className={`nav-tab ${effectiveView === 'history' ? 'active' : ''}`}
-            onClick={() => setView('history')}
-          >
-            历史
-          </button>
+          {runtimeInfo.mode === 'local' && (
+            <button
+              className={`nav-tab ${effectiveView === 'history' ? 'active' : ''}`}
+              onClick={() => setView('history')}
+            >
+              历史
+            </button>
+          )}
           {runtimeInfo.mode === 'local' && (
             <button
               className={`nav-tab ${effectiveView === 'config' ? 'active' : ''}`}

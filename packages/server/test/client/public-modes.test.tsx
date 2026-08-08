@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../client/src/App.js';
@@ -138,6 +138,7 @@ describe('runtime-owned public and local surfaces', () => {
     expect(screen.getByRole('radio', { name: '使用自己的 API Key' })).toBeTruthy();
     expect(screen.getByText('进程工具：禁用')).toBeTruthy();
     expect(screen.getByText('服务器凭据：禁用')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '历史' })).toBeNull();
     expect(screen.queryByRole('button', { name: '配置' })).toBeNull();
   });
 
@@ -145,6 +146,7 @@ describe('runtime-owned public and local surfaces', () => {
     await renderLoadedApp(localSession());
 
     expect(screen.getByRole('button', { name: '配置' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '历史' })).toBeTruthy();
     expect(screen.getByRole('radio', { name: '本地服务器凭据' })).toBeTruthy();
     expect(screen.getByText('进程工具：启用')).toBeTruthy();
   });
@@ -250,6 +252,32 @@ describe('server-session-first run flow', () => {
     expect(FakeEventSource.instances[0].closed).toBe(true);
   });
 
+  it('does not open SSE or post a key when unmounted during session acquisition', async () => {
+    Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
+    let resolveSession!: (session: SessionResponse) => void;
+    const pendingSession = new Promise<SessionResponse>((resolve) => {
+      resolveSession = resolve;
+    });
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const { unmount } = render(
+      <ChatPanel runtimeInfo={publicSession()} acquireSession={() => pendingSession} />,
+    );
+    await userEvent.click(screen.getByRole('radio', { name: '使用自己的 API Key' }));
+    await userEvent.type(screen.getByLabelText('DeepSeek API Key'), 'arbitrary-format-secret');
+    await userEvent.type(screen.getByLabelText('任务'), 'deferred task');
+    await userEvent.click(screen.getByRole('button', { name: '开始运行' }));
+
+    unmount();
+    await act(async () => {
+      resolveSession(publicSession('late-session'));
+      await pendingSession;
+    });
+
+    expect(FakeEventSource.instances).toHaveLength(0);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it('closes the previous stream before rebinding a retry to a new server session', async () => {
     let sessionCount = 0;
     let runCount = 0;
@@ -292,10 +320,14 @@ describe('server-session-first run flow', () => {
     await userEvent.type(screen.getByLabelText('任务'), 'repeatable task');
     await userEvent.click(screen.getByRole('button', { name: '开始运行' }));
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
-    FakeEventSource.instances[0].open();
-    FakeEventSource.instances[0].emit('complete', { stage: 'demo_complete', status: 'completed' });
+    await act(async () => FakeEventSource.instances[0].open());
+    await act(async () => FakeEventSource.instances[0].emit(
+      'complete',
+      { stage: 'demo_complete', status: 'completed' },
+    ));
     await screen.findByText('✓ 任务完成');
 
+    await waitFor(() => expect(screen.getByRole('button', { name: '开始运行' })).toBeTruthy());
     await userEvent.click(screen.getByRole('button', { name: '开始运行' }));
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2));
 
@@ -309,7 +341,7 @@ describe('server-session-first run flow', () => {
     await userEvent.click(screen.getByRole('button', { name: '开始运行' }));
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
     const stream = FakeEventSource.instances[0];
-    stream.open();
+    await act(async () => stream.open());
     stream.emit('tool_call', {
       sessionId: 'server-session-1',
       stage: 'dangerous_action_blocked',
@@ -449,7 +481,7 @@ describe('transient key lifecycle', () => {
 
   it('never renders a key echoed by tool or feedback return payloads', async () => {
     Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
-    const key = 'sk-test-return-echo';
+    const key = 'arbitrary-format-return-secret';
     await renderLoadedApp();
     await userEvent.click(screen.getByRole('radio', { name: '使用自己的 API Key' }));
     await userEvent.type(screen.getByLabelText('DeepSeek API Key'), key);
@@ -457,20 +489,56 @@ describe('transient key lifecycle', () => {
     await userEvent.click(screen.getByRole('button', { name: '开始运行' }));
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
     const stream = FakeEventSource.instances[0];
-    stream.open();
+    await act(async () => stream.open());
     await waitFor(() => expect((screen.getByLabelText('DeepSeek API Key') as HTMLInputElement).value).toBe(''));
 
-    stream.emit('tool_call', {
+    await act(async () => stream.emit('tool_call', {
       name: 'read_file',
       riskLevel: 'safe',
-      result: { success: true, output: `provider returned ${key}` },
-    });
-    stream.emit('feedback', {
+      stage: `untrusted-stage-${key}`,
+      status: `untrusted-status-${key}`,
+      result: {
+        success: true,
+        output: `provider returned ${key}`,
+        error: `provider error ${key}`,
+      },
+    }));
+    await act(async () => stream.emit('feedback', {
       status: 'fail',
       actionableFix: { summary: `retry without ${key}` },
-    });
+    }));
 
     expect(await screen.findByText('read_file')).toBeTruthy();
     expect(document.body.textContent).not.toContain(key);
+  });
+
+  it('preserves detailed tool and feedback diagnostics in local trusted mode', async () => {
+    await renderLoadedApp(localSession());
+    await userEvent.type(screen.getByLabelText('任务'), 'trusted diagnostics');
+    await userEvent.click(screen.getByRole('button', { name: '开始运行' }));
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const stream = FakeEventSource.instances[0];
+    stream.open();
+    await act(async () => stream.emit('tool_call', {
+      name: 'shell',
+      riskLevel: 'moderate',
+      result: { success: false, output: 'trusted tool output', error: 'exit 1' },
+    }));
+    await act(async () => stream.emit('feedback', {
+      status: 'fail',
+      failures: [{
+        file: 'src/example.ts',
+        line: 12,
+        message: 'expected true to be false',
+        type: 'assertion',
+      }],
+      actionableFix: { summary: 'update the trusted assertion' },
+    }));
+
+    expect(await screen.findByText('shell')).toBeTruthy();
+    expect(document.body.textContent).toContain('trusted tool output');
+    expect(document.body.textContent).toContain('src/example.ts:12');
+    expect(document.body.textContent).toContain('expected true to be false');
+    expect(document.body.textContent).toContain('断言');
   });
 });

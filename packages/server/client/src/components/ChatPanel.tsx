@@ -35,18 +35,33 @@ const defaultExperience = (runtime: RuntimeSession): RuntimeExperience => (
 
 const EXAMPLE_TASK = '创建一个安全的 TypeScript 示例文件，并展示护栏与反馈修正流程';
 
-const redactPublicText = (value: unknown): string => {
-  if (typeof value !== 'string') return '';
-  return value.replace(/sk-[A-Za-z0-9_-]+/gi, '[REDACTED]');
-};
+const PUBLIC_TOOL_NAMES = new Set(['read_file', 'write_file', 'list_files']);
+const PUBLIC_RISK_LEVELS = new Set(['safe', 'moderate', 'dangerous']);
+const PUBLIC_TOOL_STAGES = new Set(['initial_write', 'dangerous_action_blocked', 'corrected_write']);
+const PUBLIC_TOOL_STATUSES = new Set(['pending', 'done', 'failed']);
+const PUBLIC_FEEDBACK_SUMMARIES = new Set(['1 test failure(s) detected.']);
+
+const allowlistedText = (
+  value: unknown,
+  allowed: ReadonlySet<string>,
+  fallback = '',
+): string => typeof value === 'string' && allowed.has(value) ? value : fallback;
 
 const publicToolCallSummary = (data: any) => ({
-  name: redactPublicText(data?.name),
-  riskLevel: redactPublicText(data?.riskLevel),
-  stage: redactPublicText(data?.stage),
-  status: redactPublicText(data?.status),
-  result: { success: data?.result?.success === true },
+  name: allowlistedText(data?.name, PUBLIC_TOOL_NAMES, 'file_tool'),
+  riskLevel: allowlistedText(data?.riskLevel, PUBLIC_RISK_LEVELS, 'safe'),
+  stage: allowlistedText(data?.stage, PUBLIC_TOOL_STAGES),
+  status: allowlistedText(data?.status, PUBLIC_TOOL_STATUSES),
+  result: {
+    success: data?.result?.success === true,
+    ...(data?.result?.success === true ? {} : { error: 'TOOL_CALL_FAILED' }),
+  },
 });
+
+const publicFeedbackSummary = (value: unknown): string | null => {
+  const summary = allowlistedText(value, PUBLIC_FEEDBACK_SUMMARIES);
+  return summary || null;
+};
 
 export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
   const [task, setTask] = useState('');
@@ -56,6 +71,9 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const activeRun = useRef(false);
+  const mounted = useRef(true);
+  const runGeneration = useRef(0);
+  const runAbortController = useRef<AbortController | null>(null);
   const { events, isConnected, error: streamError, connect, close } = useSSE();
   const byokAllowed = isByokBrowserAllowed({
     isSecureContext: window.isSecureContext === true,
@@ -90,13 +108,23 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
     setApiKey('');
   }, [streamError]);
 
-  useEffect(() => () => {
-    activeRun.current = false;
-    close();
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      runGeneration.current += 1;
+      runAbortController.current?.abort();
+      runAbortController.current = null;
+      activeRun.current = false;
+      close();
+    };
   }, [close]);
 
   const changeExperience = (next: RuntimeExperience) => {
     if (running || next === experience) return;
+    runGeneration.current += 1;
+    runAbortController.current?.abort();
+    runAbortController.current = null;
     setApiKey('');
     setRunError(null);
     setSessionId(null);
@@ -117,17 +145,23 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
     if (experience === 'byok' && (!byokAllowed || !apiKey)) return;
 
     activeRun.current = true;
+    const generation = runGeneration.current + 1;
+    runGeneration.current = generation;
+    const abortController = new AbortController();
+    runAbortController.current = abortController;
     setRunning(true);
     setRunError(null);
     setTask(finalTask);
 
     try {
       const session = await acquireSession();
+      if (!mounted.current || runGeneration.current !== generation) return;
       if (!session.capabilities.allowedExperiences.includes(experience)) {
         throw new Error('EXPERIENCE_NOT_ALLOWED');
       }
       setSessionId(session.sessionId);
       await connect(session.sessionId, 5_000);
+      if (!mounted.current || runGeneration.current !== generation) return;
 
       const request: {
         sessionId: string;
@@ -145,12 +179,19 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(request),
+        signal: abortController.signal,
       });
+      if (!mounted.current || runGeneration.current !== generation) return;
       setApiKey('');
       if (!response.ok) throw new Error('RUN_START_FAILED');
     } catch {
+      if (!mounted.current || runGeneration.current !== generation) return;
       setRunError('无法启动运行，请重试。');
       stopStarting();
+    } finally {
+      if (runAbortController.current === abortController) {
+        runAbortController.current = null;
+      }
     }
   };
 
@@ -264,30 +305,53 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
               : event.data;
             return <ToolCallCard key={index} data={displayData} />;
           }
+          if (event.type === 'guardrail' && runtimeInfo.mode === 'public') {
+            return <div key={index} className="event-message">操作已被安全策略拦截。</div>;
+          }
           if (event.type === 'guardrail' && sessionId) {
             return <GuardrailDialog key={index} data={event.data} sessionId={sessionId} />;
           }
           if (event.type === 'feedback') {
             const feedback = event.data;
+            if (runtimeInfo.mode === 'public') {
+              const safeSummary = publicFeedbackSummary(feedback.actionableFix?.summary);
+              return (
+                <div key={index} className="event-message">
+                  <strong>反馈：</strong>{feedback.status === 'pass' ? '验证通过' : '验证失败'}
+                  {safeSummary && <div>{safeSummary}</div>}
+                </div>
+              );
+            }
             return (
               <div key={index} className="event-message">
-                <strong>反馈：</strong>{feedback.status === 'pass' ? '验证通过' : '验证失败'}
-                {feedback.actionableFix?.summary && (
-                  <div>
-                    {runtimeInfo.mode === 'public'
-                      ? redactPublicText(feedback.actionableFix.summary)
-                      : feedback.actionableFix.summary}
+                <strong>反馈：</strong>
+                {feedback.status === 'pass'
+                  ? '✅ 全部测试通过'
+                  : `❌ ${feedback.failures?.length || 0} 个测试失败`}
+                {feedback.failures?.map((failure: any, failureIndex: number) => (
+                  <div key={failureIndex} className="feedback-failure">
+                    {failure.file}:{failure.line} — {failure.message} (
+                    {failure.type === 'syntax'
+                      ? '语法'
+                      : failure.type === 'assertion'
+                        ? '断言'
+                        : failure.type === 'timeout'
+                          ? '超时'
+                          : '运行时'}
+                    )
                   </div>
-                )}
+                ))}
+                {feedback.actionableFix?.summary && <div>{feedback.actionableFix.summary}</div>}
               </div>
             );
           }
           if (event.type === 'loop_step') {
-            const content = event.data?.content ?? event.data?.stage ?? event.data?.phase;
             return (
               <div key={index} className="event-message">
                 <strong>步骤：</strong>
-                {runtimeInfo.mode === 'public' ? redactPublicText(content) : content}
+                {runtimeInfo.mode === 'public'
+                  ? allowlistedText(event.data?.stage, PUBLIC_TOOL_STAGES, '安全执行中')
+                  : event.data?.content ?? event.data?.stage ?? event.data?.phase}
               </div>
             );
           }
@@ -300,7 +364,7 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
           const content = event.data?.content ?? event.type;
           return (
             <div key={index} className="event-message">
-              {runtimeInfo.mode === 'public' ? redactPublicText(content) : content}
+              {runtimeInfo.mode === 'public' ? '收到安全运行事件。' : content}
             </div>
           );
         })}

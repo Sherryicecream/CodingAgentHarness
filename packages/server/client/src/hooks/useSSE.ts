@@ -14,6 +14,7 @@ export function useSSE() {
   const pendingRejectRef = useRef<((error: Error) => void) | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
+  const connectionGenerationRef = useRef(0);
 
   const clearPending = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -22,6 +23,7 @@ export function useSSE() {
   }, []);
 
   const close = useCallback(() => {
+    connectionGenerationRef.current += 1;
     const source = eventSourceRef.current;
     eventSourceRef.current = null;
     source?.close();
@@ -31,7 +33,10 @@ export function useSSE() {
   }, [clearPending]);
 
   const connect = useCallback((sessionId: string, timeoutMs = 5_000): Promise<void> => {
+    if (!mountedRef.current) return Promise.reject(new Error('SSE_COMPONENT_UNMOUNTED'));
     close();
+    if (!mountedRef.current) return Promise.reject(new Error('SSE_COMPONENT_UNMOUNTED'));
+    const generation = connectionGenerationRef.current;
     setEvents([]);
     setError(null);
     setIsConnected(false);
@@ -51,6 +56,7 @@ export function useSSE() {
       };
       pendingRejectRef.current = (failure) => settle(failure);
       timerRef.current = setTimeout(() => {
+        if (generation !== connectionGenerationRef.current) return;
         if (eventSourceRef.current === source) {
           eventSourceRef.current = null;
           source.close();
@@ -63,14 +69,14 @@ export function useSSE() {
       }, timeoutMs);
 
       source.onopen = () => {
-        if (eventSourceRef.current !== source) return;
+        if (!mountedRef.current || generation !== connectionGenerationRef.current || eventSourceRef.current !== source) return;
         opened = true;
         if (mountedRef.current) setIsConnected(true);
         settle();
       };
 
       source.onmessage = (message) => {
-        if (eventSourceRef.current !== source) return;
+        if (!mountedRef.current || generation !== connectionGenerationRef.current || eventSourceRef.current !== source) return;
         let parsed: SSEEvent;
         try {
           parsed = JSON.parse(message.data) as SSEEvent;
@@ -90,7 +96,7 @@ export function useSSE() {
       };
 
       source.onerror = () => {
-        if (eventSourceRef.current !== source) return;
+        if (!mountedRef.current || generation !== connectionGenerationRef.current || eventSourceRef.current !== source) return;
         eventSourceRef.current = null;
         source.close();
         if (mountedRef.current) {
@@ -106,6 +112,7 @@ export function useSSE() {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      connectionGenerationRef.current += 1;
       const source = eventSourceRef.current;
       eventSourceRef.current = null;
       source?.close();
