@@ -1,206 +1,369 @@
-import { Router, Request, Response } from 'express';
+import { Router, type Request, type Response } from 'express';
+import { rateLimit } from 'express-rate-limit';
 import {
-  createAgentLoop, MockLLMAdapter, DeepSeekAdapter,
-  createToolRegistry, createReadFileTool, createWriteFileTool,
-  createExecuteShellTool, createRunTestsTool, createSearchCodeTool,
-  createGitDiffTool, createGitCommitTool,
-  createGovernanceService, createFeedbackLoop,
-  createTestRunner, createResultParser, createFailureClassifier, createFixSuggestionBuilder,
-  createContextBuilder, createStopCondition, createSessionStore,
+  DeepSeekAdapter,
+  MockLLMAdapter,
+  createAgentLoop,
+  createContextBuilder,
+  createFailureClassifier,
+  createFeedbackLoop,
+  createFixSuggestionBuilder,
+  createGovernanceService,
+  createResultParser,
+  createStopCondition,
+  createTestRunner,
   type AgentLoop,
 } from '@harness/core';
-import { createSSEManager, type SSEManager, type SSEEvent } from '../sse/sse-manager.js';
-import { createCredentialStore } from '../credential-store.js';
+import { createPolicyToolRegistry } from '../agent/tool-registry-factory.js';
+import type { CredentialStore } from '../credential-store.js';
+import type { RuntimeExperience, RuntimePolicy } from '../security/runtime-policy.js';
+import {
+  ConcurrentSessionLimitError,
+  DuplicateSessionStartError,
+  SessionNotFoundError,
+  type PublicSession,
+  type SessionRegistry,
+} from '../session/session-registry.js';
+import type { SSEEvent, SSEManager } from '../sse/sse-manager.js';
 
-export const agentRouter = Router();
+const DEFAULT_RUN_RATE_WINDOW_MS = 60 * 60 * 1_000;
+const DEFAULT_RUN_RATE_LIMIT = 20;
+const MAX_TASK_LENGTH = 1_000;
+const RUN_FIELDS = new Set(['sessionId', 'task', 'mode', 'apiKey']);
 
-// Shared state
-const sseManager: SSEManager = createSSEManager();
-const sessionStore = createSessionStore('.harness-sessions');
-const activeLoops = new Map<string, AgentLoop>();
-const credentialStore = createCredentialStore();
+export interface RunRateLimitOptions {
+  readonly windowMs?: number;
+  readonly limit?: number;
+}
 
-function buildAgentLoop(workingDir: string, sessionId?: string): AgentLoop {
-  const tools = createToolRegistry();
-  tools.register(createReadFileTool(workingDir));
-  tools.register(createWriteFileTool(workingDir));
-  tools.register(createExecuteShellTool(workingDir));
-  tools.register(createRunTestsTool(workingDir));
-  tools.register(createSearchCodeTool(workingDir));
-  tools.register(createGitDiffTool(workingDir));
-  tools.register(createGitCommitTool(workingDir));
+export interface AgentRunInput {
+  readonly session: PublicSession;
+  readonly task: string;
+  readonly mode: RuntimeExperience;
+  readonly apiKey?: string;
+  readonly emit: (type: SSEEvent['type'], data: unknown) => void;
+}
 
+export interface AgentRunOutput {
+  readonly status: string;
+  readonly sessionId?: string;
+}
+
+export interface AgentRunHandle {
+  readonly completion: Promise<AgentRunOutput | void>;
+  approve?(approved: boolean): void;
+  abort?(): void;
+}
+
+export type AgentRun = (
+  input: AgentRunInput,
+) => Promise<AgentRunOutput | void> | AgentRunHandle;
+
+export interface AgentRouterDependencies {
+  readonly policy: RuntimePolicy;
+  readonly sessionRegistry: SessionRegistry;
+  readonly sseManager: SSEManager;
+  readonly agentRun: AgentRun;
+  readonly now?: () => Date;
+  readonly fetchImpl?: typeof fetch;
+  readonly credentialStore: CredentialStore;
+  readonly runRateLimit?: RunRateLimitOptions;
+}
+
+const normalizeClientKey = (req: Request): string => {
+  const value = req.ip || req.socket.remoteAddress || 'unknown';
+  return value.replace(/^::ffff:/i, '').toLowerCase();
+};
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> => (
+  typeof value === 'object'
+  && value !== null
+  && !Array.isArray(value)
+);
+
+interface ValidatedRunRequest {
+  readonly sessionId: string;
+  readonly task: string;
+  readonly mode: RuntimeExperience;
+  readonly apiKey?: string;
+}
+
+const validateRunRequest = (body: unknown): ValidatedRunRequest | null => {
+  if (!isPlainObject(body) || Object.keys(body).some((key) => !RUN_FIELDS.has(key))) {
+    return null;
+  }
+  const { sessionId, task, mode, apiKey } = body;
+  if (
+    typeof sessionId !== 'string'
+    || sessionId.length === 0
+    || typeof task !== 'string'
+    || task.trim().length === 0
+    || task.length > MAX_TASK_LENGTH
+    || typeof mode !== 'string'
+    || (apiKey !== undefined && typeof apiKey !== 'string')
+  ) {
+    return null;
+  }
+  return { sessionId, task, mode: mode as RuntimeExperience, apiKey };
+};
+
+const toRunHandle = (
+  started: Promise<AgentRunOutput | void> | AgentRunHandle,
+): AgentRunHandle => (
+  'completion' in started ? started : { completion: started }
+);
+
+export const createAgentRouter = (
+  dependencies: AgentRouterDependencies,
+): Router => {
+  const router = Router();
+  const now = dependencies.now ?? (() => new Date());
+  const activeRuns = new Map<string, AgentRunHandle>();
+  const emit = (sessionId: string, type: SSEEvent['type'], data: unknown): void => {
+    dependencies.sseManager.push(sessionId, { type, data, timestamp: now() });
+  };
+
+  const runLimiter = rateLimit({
+    windowMs: dependencies.runRateLimit?.windowMs ?? DEFAULT_RUN_RATE_WINDOW_MS,
+    limit: dependencies.runRateLimit?.limit ?? DEFAULT_RUN_RATE_LIMIT,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    handler: (_req, res) => {
+      res.status(429).json({ error: 'RUN_RATE_LIMIT' });
+    },
+  });
+
+  router.post('/sessions', async (req: Request, res: Response) => {
+    if (!isPlainObject(req.body) || Object.keys(req.body).length !== 0) {
+      res.status(400).json({ error: 'INVALID_SESSION_REQUEST' });
+      return;
+    }
+    try {
+      const session = await dependencies.sessionRegistry.issue(normalizeClientKey(req));
+      res.status(201).json({
+        sessionId: session.id,
+        mode: dependencies.policy.mode,
+        capabilities: {
+          allowedExperiences: dependencies.policy.allowedExperiences,
+          allowByok: dependencies.policy.allowByok,
+          allowProcessTools: dependencies.policy.allowProcessTools,
+          allowServerCredentials: dependencies.policy.allowServerCredentials,
+        },
+        expiresAt: session.expiresAt.toISOString(),
+      });
+    } catch {
+      res.status(500).json({ error: 'SESSION_ISSUE_FAILED' });
+    }
+  });
+
+  router.post('/run', runLimiter, (req: Request, res: Response) => {
+    const input = validateRunRequest(req.body);
+    if (!input) {
+      res.status(400).json({ error: 'INVALID_RUN_REQUEST' });
+      return;
+    }
+    if (!dependencies.policy.allowedExperiences.includes(input.mode)) {
+      res.status(403).json({ error: 'EXPERIENCE_NOT_ALLOWED' });
+      return;
+    }
+
+    const clientKey = normalizeClientKey(req);
+    if (!dependencies.sessionRegistry.getAuthorized(input.sessionId, clientKey)) {
+      res.status(404).json({ error: 'SESSION_NOT_FOUND' });
+      return;
+    }
+
+    let session: PublicSession;
+    try {
+      session = dependencies.sessionRegistry.start(input.sessionId, clientKey);
+    } catch (error) {
+      if (error instanceof DuplicateSessionStartError) {
+        res.status(409).json({ error: 'SESSION_ALREADY_RUNNING' });
+        return;
+      }
+      if (error instanceof ConcurrentSessionLimitError) {
+        res.status(429).json({ error: 'CONCURRENT_RUN_LIMIT' });
+        return;
+      }
+      if (error instanceof SessionNotFoundError) {
+        res.status(404).json({ error: 'SESSION_NOT_FOUND' });
+        return;
+      }
+      res.status(500).json({ error: 'RUN_START_FAILED' });
+      return;
+    }
+
+    let handle: AgentRunHandle;
+    try {
+      handle = toRunHandle(dependencies.agentRun({
+        session,
+        task: input.task,
+        mode: input.mode,
+        apiKey: input.apiKey,
+        emit: (type, data) => emit(session.id, type, data),
+      }));
+    } catch {
+      dependencies.sessionRegistry.fail(session.id, clientKey);
+      res.status(500).json({ error: 'RUN_START_FAILED' });
+      return;
+    }
+
+    activeRuns.set(session.id, handle);
+    emit(session.id, 'loop_step', { phase: 'starting', mode: input.mode });
+    void handle.completion.then((result) => {
+      if (result?.status === 'blocked') {
+        emit(session.id, 'complete', { status: result.status, sessionId: result.sessionId });
+        return;
+      }
+      dependencies.sessionRegistry.complete(session.id, clientKey);
+      emit(session.id, 'complete', {
+        status: result?.status ?? 'completed',
+        sessionId: result?.sessionId ?? session.id,
+      });
+      activeRuns.delete(session.id);
+      dependencies.sseManager.close(session.id);
+    }).catch(() => {
+      dependencies.sessionRegistry.fail(session.id, clientKey);
+      emit(session.id, 'error', { error: 'AGENT_RUN_FAILED' });
+      activeRuns.delete(session.id);
+      dependencies.sseManager.close(session.id);
+    });
+
+    res.status(202).json({ sessionId: session.id, status: 'started' });
+  });
+
+  router.get('/stream/:sessionId', (req: Request, res: Response) => {
+    const { sessionId } = req.params;
+    if (!dependencies.sessionRegistry.getAuthorized(sessionId, normalizeClientKey(req))) {
+      res.status(404).json({ error: 'SESSION_NOT_FOUND' });
+      return;
+    }
+    dependencies.sseManager.createConnection(sessionId, res);
+    const keepAlive = setInterval(() => res.write(': keepalive\n\n'), 15_000);
+    req.on('close', () => {
+      clearInterval(keepAlive);
+      dependencies.sseManager.close(sessionId);
+    });
+  });
+
+  router.post('/test-key', async (_req: Request, res: Response) => {
+    if (!dependencies.policy.allowServerCredentials) {
+      res.status(403).json({ error: 'CONFIG_DISABLED' });
+      return;
+    }
+    const apiKey = dependencies.credentialStore.getKey('harness/deepseek-api-key');
+    if (!apiKey) {
+      res.json({ valid: false, error: 'API_KEY_NOT_CONFIGURED' });
+      return;
+    }
+    try {
+      const response = await (dependencies.fetchImpl ?? fetch)(
+        `${process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'}/v1/chat/completions`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: 'deepseek-chat',
+            messages: [{ role: 'user', content: 'Hello' }],
+            max_tokens: 5,
+          }),
+        },
+      );
+      res.json(response.ok
+        ? { valid: true }
+        : { valid: false, error: `API returned ${response.status}` });
+    } catch {
+      res.json({ valid: false, error: 'API_CONNECTION_FAILED' });
+    }
+  });
+
+  const handleApproval = (approved: boolean) => (req: Request, res: Response): void => {
+    const sessionId = isPlainObject(req.body) ? req.body.sessionId : undefined;
+    if (typeof sessionId !== 'string') {
+      res.status(400).json({ error: 'INVALID_APPROVAL_REQUEST' });
+      return;
+    }
+    const clientKey = normalizeClientKey(req);
+    if (!dependencies.sessionRegistry.getAuthorized(sessionId, clientKey)) {
+      res.status(404).json({ error: 'SESSION_NOT_FOUND' });
+      return;
+    }
+    const handle = activeRuns.get(sessionId);
+    if (!handle?.approve) {
+      res.status(404).json({ error: 'SESSION_NOT_FOUND' });
+      return;
+    }
+    handle.approve(approved);
+    emit(sessionId, 'guardrail', { approved, sessionId });
+    if (!approved) {
+      dependencies.sessionRegistry.fail(sessionId, clientKey);
+      activeRuns.delete(sessionId);
+      dependencies.sseManager.close(sessionId);
+    }
+    res.json({ sessionId, status: approved ? 'approved' : 'rejected' });
+  };
+
+  router.post('/approve', handleApproval(true));
+  router.post('/reject', handleApproval(false));
+
+  return router;
+};
+
+export interface DefaultAgentRunOptions {
+  readonly policy: RuntimePolicy;
+  readonly credentialStore: CredentialStore;
+}
+
+export const createDefaultAgentRun = (
+  options: DefaultAgentRunOptions,
+): AgentRun => ({ session, task, mode, emit }) => {
+  const tools = createPolicyToolRegistry(options.policy, session.workspace);
   const governance = createGovernanceService();
-  const testRunner = createTestRunner();
-  const resultParser = createResultParser();
-  const failureClassifier = createFailureClassifier();
-  const fixSuggestionBuilder = createFixSuggestionBuilder();
-  const feedback = createFeedbackLoop(testRunner, resultParser, failureClassifier, fixSuggestionBuilder);
-
-  const contextBuilder = createContextBuilder();
-  const stopCondition = createStopCondition();
-
-  // Check credential store first, then environment variable
-  const storedKey = credentialStore.getKey('harness/deepseek-api-key');
-  const apiKey = storedKey || process.env.DEEPSEEK_API_KEY || '';
-  const baseUrl = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com';
-
+  const feedback = createFeedbackLoop(
+    createTestRunner(),
+    createResultParser(),
+    createFailureClassifier(),
+    createFixSuggestionBuilder(),
+  );
+  let apiKey = '';
+  if (mode === 'server' && options.policy.allowServerCredentials) {
+    apiKey = options.credentialStore.getKey('harness/deepseek-api-key') || '';
+  }
   const llm = apiKey
-    ? new DeepSeekAdapter({ apiKey, baseUrl })
+    ? new DeepSeekAdapter({
+        apiKey,
+        baseUrl: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
+      })
     : new MockLLMAdapter([
         {
-          content: 'I will read the project files to understand the codebase.',
-          toolCalls: [{ id: 'call_1', name: 'read_file', arguments: { filePath: 'src/index.ts' } }],
+          content: 'I will inspect the isolated workspace.',
+          toolCalls: [{
+            id: 'call_1',
+            name: 'search_code',
+            arguments: { query: task, filePattern: '**/*' },
+          }],
         },
-        {
-          content: 'Task completed successfully.',
-          toolCalls: [],
-        },
+        { content: 'Task completed.', toolCalls: [] },
       ]);
-
-  return createAgentLoop({
+  const loop: AgentLoop = createAgentLoop({
     llm,
     tools,
     governance,
     feedback,
-    contextBuilder,
-    stopCondition,
+    contextBuilder: createContextBuilder(),
+    stopCondition: createStopCondition(),
     config: { maxIterations: 10 },
-    onEvent: sessionId ? (type, data) => emit(sessionId, type as any, data) : undefined,
+    onEvent: (type, data) => emit(type as SSEEvent['type'], data),
   });
-}
-
-function emit(sessionId: string, type: SSEEvent['type'], data: unknown) {
-  sseManager.push(sessionId, { type, data, timestamp: new Date() });
-}
-
-// POST /api/agent/run — Run an agent loop
-agentRouter.post('/run', async (req: Request, res: Response) => {
-  try {
-    const { task, workingDir, sessionId } = req.body;
-    if (!task || !workingDir || !sessionId) {
-      res.status(400).json({ error: '缺少必填参数：task、workingDir、sessionId' });
-      return;
-    }
-
-    const agentLoop = buildAgentLoop(workingDir, sessionId);
-    activeLoops.set(sessionId, agentLoop);
-
-    emit(sessionId, 'loop_step', { phase: 'starting', task });
-
-    // Run the agent loop
-    agentLoop.run(task, workingDir).then(async (result) => {
-      await sessionStore.save(result.session);
-      emit(sessionId, 'complete', { status: result.status, sessionId: result.session.id });
-
-      if (result.status === 'blocked') {
-        // Don't remove from activeLoops — waiting for approve/reject
-      } else {
-        activeLoops.delete(sessionId);
-        sseManager.close(sessionId);
-      }
-    }).catch((err: Error) => {
-      const message = err.name === 'LLMCallError'
-        ? `${err.message}`
-        : err.message;
-      emit(sessionId, 'error', { message });
-      activeLoops.delete(sessionId);
-      sseManager.close(sessionId);
-    });
-
-    res.json({ sessionId, status: 'started' });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET /api/agent/stream/:sessionId — SSE endpoint
-agentRouter.get('/stream/:sessionId', (req: Request, res: Response) => {
-  const { sessionId } = req.params;
-  sseManager.createConnection(sessionId, res);
-
-  // Keep connection alive
-  const keepAlive = setInterval(() => {
-    res.write(': keepalive\n\n');
-  }, 15000);
-
-  req.on('close', () => {
-    clearInterval(keepAlive);
-    sseManager.close(sessionId);
-  });
-});
-
-// POST /api/agent/test-key — Test if the API key is valid
-agentRouter.post('/test-key', async (_req: Request, res: Response) => {
-  try {
-    const storedKey = credentialStore.getKey('harness/deepseek-api-key');
-    const apiKey = storedKey || process.env.DEEPSEEK_API_KEY;
-    if (!apiKey) {
-      res.json({ valid: false, error: '未配置 API Key' });
-      return;
-    }
-
-    const baseUrl = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com';
-    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [{ role: 'user', content: 'Hello' }],
-        max_tokens: 5,
-      }),
-    });
-
-    if (response.ok) {
-      res.json({ valid: true });
-    } else {
-      const text = await response.text();
-      res.json({ valid: false, error: `API 返回 ${response.status}: ${text}` });
-    }
-  } catch (err: any) {
-    res.json({ valid: false, error: `连接失败：${err.message}` });
-  }
-});
-
-// POST /api/agent/approve — Approve HITL blocked action
-agentRouter.post('/approve', (req: Request, res: Response) => {
-  const { sessionId } = req.body;
-  if (!sessionId) {
-    res.status(400).json({ error: '缺少必填参数：sessionId' });
-    return;
-  }
-
-  const loop = activeLoops.get(sessionId);
-  if (!loop) {
-    res.status(404).json({ error: '未找到会话，或会话不在阻断状态' });
-    return;
-  }
-
-  loop.handleApproval(true);
-  emit(sessionId, 'guardrail', { approved: true, sessionId });
-  res.json({ sessionId, status: 'approved' });
-});
-
-// POST /api/agent/reject — Reject HITL blocked action
-agentRouter.post('/reject', (req: Request, res: Response) => {
-  const { sessionId } = req.body;
-  if (!sessionId) {
-    res.status(400).json({ error: '缺少必填参数：sessionId' });
-    return;
-  }
-
-  const loop = activeLoops.get(sessionId);
-  if (!loop) {
-    res.status(404).json({ error: '未找到会话，或会话不在阻断状态' });
-    return;
-  }
-
-  loop.handleApproval(false);
-  emit(sessionId, 'guardrail', { approved: false, sessionId });
-  activeLoops.delete(sessionId);
-  sseManager.close(sessionId);
-  res.json({ sessionId, status: 'rejected' });
-});
+  return {
+    completion: loop.run(task, session.workspace).then((result) => ({
+      status: result.status,
+      sessionId: result.session.id,
+    })),
+    approve: (approved) => loop.handleApproval(approved),
+    abort: () => loop.abort(),
+  };
+};
