@@ -737,6 +737,93 @@ describe('public agent request boundaries', () => {
     expect(replacement.status).toBe(202);
   });
 
+  it.each([
+    { settlement: 'resolve' as const, expectedEvent: 'complete' },
+    { settlement: 'reject' as const, expectedEvent: 'error' },
+  ])('retains a raced completion $settlement when expiry abort fails', async ({
+    settlement,
+    expectedEvent,
+  }) => {
+    let currentTime = new Date('2026-08-08T00:00:00.000Z');
+    const root = await createWorkspaceRoot();
+    const ids = [`raced-${settlement}`, `replacement-${settlement}`];
+    let resolveCompletion!: (value: { status: string; sessionId: string }) => void;
+    let rejectCompletion!: (error: Error) => void;
+    const completion = new Promise<{ status: string; sessionId: string }>((resolve, reject) => {
+      resolveCompletion = resolve;
+      rejectCompletion = reject;
+    });
+    let markAbortStarted!: () => void;
+    const abortStarted = new Promise<void>((resolve) => { markAbortStarted = resolve; });
+    let rejectAbort!: (error: Error) => void;
+    const abortFailure = new Promise<void>((_resolve, reject) => { rejectAbort = reject; });
+    const warnings: unknown[] = [];
+    const events: string[] = [];
+    let closeCalls = 0;
+    let abortCalls = 0;
+    const app = createApp({
+      mode: 'public',
+      workspaceRoot: root,
+      idGenerator: () => ids.shift()!,
+      now: () => new Date(currentTime),
+      maxConcurrent: 1,
+      logger: {
+        error: () => undefined,
+        info: () => undefined,
+        warn: (message) => { warnings.push(message); },
+      },
+      agentRun: ({ session }) => session.id === `raced-${settlement}` ? {
+        completion,
+        abort: async () => {
+          abortCalls += 1;
+          markAbortStarted();
+          await abortFailure;
+        },
+      } : {
+        completion: pendingRun(),
+        abort: () => undefined,
+      },
+      sseManager: {
+        createConnection: () => undefined,
+        push: (_sessionId, event) => { events.push(event.type); },
+        close: () => { closeCalls += 1; },
+      },
+    });
+    createdApps.push(app);
+    await request(app).post('/api/agent/sessions').send({});
+    await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: `raced-${settlement}`, task: 'race', mode: 'demo' });
+
+    currentTime = new Date('2026-08-08T01:00:00.000Z');
+    const sweep = app.sweepSessions();
+    await abortStarted;
+    if (settlement === 'resolve') {
+      resolveCompletion({ status: 'completed', sessionId: `raced-${settlement}` });
+    } else {
+      rejectCompletion(new Error('run completed with failure'));
+    }
+    await nextTurn();
+    rejectAbort(new Error('abort lost race with completion'));
+    await sweep;
+
+    await expect(realpath(join(root, `raced-${settlement}`)))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+    const replacementIssued = await request(app).post('/api/agent/sessions').send({});
+    const replacement = await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: `replacement-${settlement}`, task: 'replacement', mode: 'demo' });
+
+    expect(abortCalls).toBe(1);
+    expect(closeCalls).toBe(1);
+    expect(events.filter((event) => event === expectedEvent)).toHaveLength(1);
+    expect(events.filter((event) => event === (expectedEvent === 'complete' ? 'error' : 'complete')))
+      .toHaveLength(0);
+    expect(warnings).toContain('SESSION_ABORT_FAILED');
+    expect(replacementIssued.status).toBe(201);
+    expect(replacement.status).toBe(202);
+  });
+
   it('keeps an active workspace when abort fails and retries on the next sweep', async () => {
     let currentTime = new Date('2026-08-08T00:00:00.000Z');
     const root = await createWorkspaceRoot();

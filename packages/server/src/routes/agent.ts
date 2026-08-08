@@ -136,12 +136,16 @@ export const createAgentRouter = (
   const router = Router() as AgentRouter;
   const now = dependencies.now ?? (() => new Date());
   const logger = dependencies.logger ?? console;
+  type CompletionOutcome =
+    | { readonly kind: 'resolved'; readonly result: AgentRunOutput | void }
+    | { readonly kind: 'rejected' };
   interface ActiveRun {
     readonly session: PublicSession;
     readonly clientKey: string;
     readonly handle: AgentRunHandle;
     phase: 'running' | 'blocked' | 'continuing' | 'terminating' | 'terminal';
     termination?: Promise<void>;
+    pendingCompletionOutcome?: CompletionOutcome;
   }
   const activeRuns = new Map<string, ActiveRun>();
   const emit = (sessionId: string, type: SSEEvent['type'], data: unknown): void => {
@@ -201,6 +205,25 @@ export const createAgentRouter = (
       cleanupRun(active);
     }
   };
+  const applyCompletionOutcome = async (
+    active: ActiveRun,
+    outcome: CompletionOutcome,
+  ): Promise<boolean> => {
+    if (outcome.kind === 'resolved' && outcome.result?.status === 'blocked') {
+      active.phase = 'blocked';
+      emit(active.session.id, 'complete', {
+        status: outcome.result.status,
+        sessionId: outcome.result.sessionId,
+      });
+      return false;
+    }
+    await finalizeRun(
+      active,
+      outcome.kind === 'resolved' ? 'completed' : 'failed',
+      outcome.kind === 'resolved' ? outcome.result : undefined,
+    );
+    return true;
+  };
   const terminateRun = (
     active: ActiveRun,
     rejectedByUser: boolean,
@@ -239,10 +262,22 @@ export const createAgentRouter = (
         }
         await finalizeRun(active, 'failed');
       } catch (error) {
+        let racedCompletionReachedTerminal = false;
         if (activeRuns.get(active.session.id) === active && active.phase === 'terminating') {
+          const racedCompletion = active.pendingCompletionOutcome;
+          active.pendingCompletionOutcome = undefined;
           active.phase = previousPhase;
+          if (racedCompletion) {
+            racedCompletionReachedTerminal = await applyCompletionOutcome(
+              active,
+              racedCompletion,
+            );
+          }
         }
         logger.warn('SESSION_ABORT_FAILED');
+        if (racedCompletionReachedTerminal) {
+          return;
+        }
         throw error;
       } finally {
         active.termination = undefined;
@@ -256,23 +291,25 @@ export const createAgentRouter = (
     completion: Promise<AgentRunOutput | void>,
   ): void => {
     void completion.then(async (result) => {
+      const outcome: CompletionOutcome = { kind: 'resolved', result };
+      if (active.phase === 'terminating') {
+        active.pendingCompletionOutcome = outcome;
+        return;
+      }
       if (active.phase !== 'running') {
         return;
       }
-      if (result?.status === 'blocked') {
-        active.phase = 'blocked';
-        emit(active.session.id, 'complete', {
-          status: result.status,
-          sessionId: result.sessionId,
-        });
-        return;
-      }
-      await finalizeRun(active, 'completed', result);
+      await applyCompletionOutcome(active, outcome);
     }, async () => {
+      const outcome: CompletionOutcome = { kind: 'rejected' };
+      if (active.phase === 'terminating') {
+        active.pendingCompletionOutcome = outcome;
+        return;
+      }
       if (active.phase !== 'running') {
         return;
       }
-      await finalizeRun(active, 'failed');
+      await applyCompletionOutcome(active, outcome);
     }).catch(() => logger.warn('SESSION_FINALIZATION_FAILED'));
   };
 
