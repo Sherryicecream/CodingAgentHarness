@@ -8,6 +8,7 @@ import {
   createAgentRouter,
   createDefaultAgentRun,
   type AgentRun,
+  type ByokAdapterFactory,
   type RunRateLimitOptions,
 } from './routes/agent.js';
 import { createConfigRouter } from './routes/config.js';
@@ -48,6 +49,7 @@ export interface AppOptions {
   logger?: Pick<Console, 'error' | 'info' | 'warn'>;
   credentialStore?: CredentialStore;
   agentRun?: AgentRun;
+  byokAdapterFactory?: ByokAdapterFactory;
   maxConcurrent?: number;
   runRateLimit?: RunRateLimitOptions;
   sessionRateLimit?: RunRateLimitOptions;
@@ -154,7 +156,11 @@ export const createApp = (options: AppOptions = {}): HarnessApp => {
     policy,
     sessionRegistry,
     sseManager,
-    agentRun: options.agentRun ?? createDefaultAgentRun({ policy, credentialStore }),
+    agentRun: options.agentRun ?? createDefaultAgentRun({
+      policy,
+      credentialStore,
+      byokAdapterFactory: options.byokAdapterFactory,
+    }),
     now: options.now,
     fetchImpl: options.fetchImpl,
     credentialStore,

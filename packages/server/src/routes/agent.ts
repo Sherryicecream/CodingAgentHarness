@@ -13,11 +13,14 @@ import {
   createStopCondition,
   createTestRunner,
   type AgentLoop,
+  type LLMAdapter,
   type Session,
   type SessionStore,
 } from '@harness/core';
 import { createPolicyToolRegistry } from '../agent/tool-registry-factory.js';
 import type { CredentialStore } from '../credential-store.js';
+import { isSecureByokRequest } from '../security/request-security.js';
+import { redactSecrets } from '../security/secret-redactor.js';
 import type { RuntimeExperience, RuntimePolicy } from '../security/runtime-policy.js';
 import {
   ConcurrentSessionLimitError,
@@ -58,11 +61,19 @@ export interface AgentRunHandle {
   continueAfterApproval?(): Promise<AgentRunOutput | void>;
   approve?(approved: boolean): void;
   abort?(): void | Promise<void>;
+  release?(): void;
 }
 
 export type AgentRun = (
   input: AgentRunInput,
 ) => Promise<AgentRunOutput | void> | AgentRunHandle;
+
+export interface ByokAdapterResource {
+  readonly adapter: LLMAdapter;
+  release?(): void;
+}
+
+export type ByokAdapterFactory = (apiKey: string) => ByokAdapterResource;
 
 export interface AgentRouterDependencies {
   readonly policy: RuntimePolicy;
@@ -118,6 +129,8 @@ const validateRunRequest = (body: unknown): ValidatedRunRequest | null => {
     || task.length > MAX_TASK_LENGTH
     || typeof mode !== 'string'
     || (apiKey !== undefined && typeof apiKey !== 'string')
+    || (mode === 'byok' && (typeof apiKey !== 'string' || apiKey.length === 0))
+    || (mode !== 'byok' && apiKey !== undefined)
   ) {
     return null;
   }
@@ -130,6 +143,27 @@ const toRunHandle = (
   'completion' in started ? started : { completion: started }
 );
 
+const safeProviderStatus = (error: unknown): number | undefined => {
+  if (typeof error !== 'object' || error === null) {
+    return undefined;
+  }
+  try {
+    const status = Reflect.get(error, 'statusCode');
+    return Number.isInteger(status) && status >= 400 && status <= 599
+      ? status as number
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+class LLMProviderError extends Error {
+  constructor(readonly statusCode?: number) {
+    super('LLM_PROVIDER_ERROR');
+    this.name = 'LLMProviderError';
+  }
+}
+
 export const createAgentRouter = (
   dependencies: AgentRouterDependencies,
 ): AgentRouter => {
@@ -138,14 +172,16 @@ export const createAgentRouter = (
   const logger = dependencies.logger ?? console;
   type CompletionOutcome =
     | { readonly kind: 'resolved'; readonly result: AgentRunOutput | void }
-    | { readonly kind: 'rejected' };
+    | { readonly kind: 'rejected'; readonly providerStatus?: number };
   interface ActiveRun {
     readonly session: PublicSession;
     readonly clientKey: string;
     readonly handle: AgentRunHandle;
+    readonly mode: RuntimeExperience;
     phase: 'running' | 'blocked' | 'continuing' | 'terminating' | 'terminal';
     termination?: Promise<void>;
     pendingCompletionOutcome?: CompletionOutcome;
+    providerStatus?: number;
   }
   const activeRuns = new Map<string, ActiveRun>();
   const emit = (sessionId: string, type: SSEEvent['type'], data: unknown): void => {
@@ -156,9 +192,16 @@ export const createAgentRouter = (
       activeRuns.delete(active.session.id);
     }
     try {
-      dependencies.sseManager.close(active.session.id);
+      active.handle.release?.();
     } catch {
-      logger.warn('SESSION_SSE_CLOSE_FAILED');
+      logger.warn('SESSION_RESOURCE_RELEASE_FAILED');
+    } finally {
+      try {
+        dependencies.sseManager.clearSecrets?.(active.session.id);
+        dependencies.sseManager.close(active.session.id);
+      } catch {
+        logger.warn('SESSION_SSE_CLOSE_FAILED');
+      }
     }
   };
   const finalizeRun = async (
@@ -196,7 +239,14 @@ export const createAgentRouter = (
             sessionId: result?.sessionId ?? active.session.id,
           });
         } else {
-          emit(active.session.id, 'error', { error: 'AGENT_RUN_FAILED' });
+          emit(active.session.id, 'error', active.mode === 'byok'
+            ? {
+                error: 'LLM_PROVIDER_ERROR',
+                ...(active.providerStatus === undefined
+                  ? {}
+                  : { status: active.providerStatus }),
+              }
+            : { error: 'AGENT_RUN_FAILED' });
         }
       } catch {
         logger.warn('SESSION_TERMINAL_EVENT_FAILED');
@@ -209,6 +259,9 @@ export const createAgentRouter = (
     active: ActiveRun,
     outcome: CompletionOutcome,
   ): Promise<boolean> => {
+    if (outcome.kind === 'rejected') {
+      active.providerStatus = outcome.providerStatus;
+    }
     if (outcome.kind === 'resolved' && outcome.result?.status === 'blocked') {
       active.phase = 'blocked';
       emit(active.session.id, 'complete', {
@@ -300,8 +353,11 @@ export const createAgentRouter = (
         return;
       }
       await applyCompletionOutcome(active, outcome);
-    }, async () => {
-      const outcome: CompletionOutcome = { kind: 'rejected' };
+    }, async (error: unknown) => {
+      const outcome: CompletionOutcome = {
+        kind: 'rejected',
+        providerStatus: safeProviderStatus(error),
+      };
       if (active.phase === 'terminating') {
         active.pendingCompletionOutcome = outcome;
         return;
@@ -366,6 +422,10 @@ export const createAgentRouter = (
       res.status(403).json({ error: 'EXPERIENCE_NOT_ALLOWED' });
       return;
     }
+    if (input.mode === 'byok' && !isSecureByokRequest(req)) {
+      res.status(400).json({ error: 'BYOK_REQUIRES_HTTPS' });
+      return;
+    }
 
     const clientKey = normalizeClientKey(req);
     if (!dependencies.sessionRegistry.getAuthorized(input.sessionId, clientKey)) {
@@ -395,6 +455,12 @@ export const createAgentRouter = (
 
     let handle: AgentRunHandle;
     try {
+      if (input.mode === 'byok') {
+        if (!dependencies.sseManager.setSecrets || !dependencies.sseManager.disconnect) {
+          throw new Error('SSE secret redaction is unavailable');
+        }
+        dependencies.sseManager.setSecrets(session.id, [input.apiKey!]);
+      }
       handle = toRunHandle(dependencies.agentRun({
         session,
         task: input.task,
@@ -404,6 +470,12 @@ export const createAgentRouter = (
       }));
     } catch {
       dependencies.sessionRegistry.fail(session.id, clientKey);
+      try {
+        dependencies.sseManager.clearSecrets?.(session.id);
+        dependencies.sseManager.close(session.id);
+      } catch {
+        logger.warn('SESSION_SSE_CLOSE_FAILED');
+      }
       res.status(500).json({ error: 'RUN_START_FAILED' });
       return;
     }
@@ -412,6 +484,7 @@ export const createAgentRouter = (
       session,
       clientKey,
       handle,
+      mode: input.mode,
       phase: 'running',
     };
     activeRuns.set(session.id, active);
@@ -431,7 +504,11 @@ export const createAgentRouter = (
     const keepAlive = setInterval(() => res.write(': keepalive\n\n'), 15_000);
     req.on('close', () => {
       clearInterval(keepAlive);
-      dependencies.sseManager.close(sessionId);
+      if (dependencies.sseManager.disconnect) {
+        dependencies.sseManager.disconnect(sessionId);
+      } else {
+        dependencies.sseManager.close(sessionId);
+      }
     });
   });
 
@@ -561,11 +638,32 @@ export const createAgentRouter = (
 export interface DefaultAgentRunOptions {
   readonly policy: RuntimePolicy;
   readonly credentialStore: CredentialStore;
+  readonly byokAdapterFactory?: ByokAdapterFactory;
 }
+
+const createTransientDeepSeekResource: ByokAdapterFactory = (apiKey) => {
+  let adapter: LLMAdapter | undefined = new DeepSeekAdapter({
+    apiKey,
+    baseUrl: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
+  });
+  return {
+    adapter: {
+      sendMessage: (context) => {
+        const activeAdapter = adapter;
+        if (!activeAdapter) {
+          throw new Error('BYOK adapter is no longer available');
+        }
+        return activeAdapter.sendMessage(context);
+      },
+    },
+    release: () => { adapter = undefined; },
+  };
+};
 
 export const createDefaultAgentRun = (
   options: DefaultAgentRunOptions,
-): AgentRun => ({ session, task, mode, emit }) => {
+): AgentRun => (input) => {
+  const { session, task, mode, emit } = input;
   const tools = createPolicyToolRegistry(options.policy, session.workspace);
   const governance = createGovernanceService();
   const feedback = createFeedbackLoop(
@@ -574,16 +672,26 @@ export const createDefaultAgentRun = (
     createFailureClassifier(),
     createFixSuggestionBuilder(),
   );
-  let apiKey = '';
-  if (mode === 'server' && options.policy.allowServerCredentials) {
-    apiKey = options.credentialStore.getKey('harness/deepseek-api-key') || '';
-  }
-  const llm = apiKey
-    ? new DeepSeekAdapter({
-        apiKey,
-        baseUrl: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
-      })
-    : new MockLLMAdapter([
+  let byokSecret = mode === 'byok' ? input.apiKey ?? '' : '';
+  let byokResource: ByokAdapterResource | undefined;
+  let llm: LLMAdapter;
+  if (mode === 'byok') {
+    if (byokSecret.length === 0) {
+      throw new Error('BYOK requires a credential');
+    }
+    byokResource = (options.byokAdapterFactory ?? createTransientDeepSeekResource)(byokSecret);
+    llm = byokResource.adapter;
+  } else {
+    let serverApiKey = '';
+    if (mode === 'server' && options.policy.allowServerCredentials) {
+      serverApiKey = options.credentialStore.getKey('harness/deepseek-api-key') || '';
+    }
+    llm = serverApiKey
+      ? new DeepSeekAdapter({
+          apiKey: serverApiKey,
+          baseUrl: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
+        })
+      : new MockLLMAdapter([
         {
           content: 'I will inspect the isolated workspace.',
           toolCalls: [{
@@ -594,7 +702,9 @@ export const createDefaultAgentRun = (
         },
         { content: 'Task completed.', toolCalls: [] },
       ]);
-  const loop: AgentLoop = createAgentLoop({
+    serverApiKey = '';
+  }
+  let loop: AgentLoop | undefined = createAgentLoop({
     llm,
     tools,
     governance,
@@ -605,23 +715,51 @@ export const createDefaultAgentRun = (
     onEvent: (type, data) => emit(type as SSEEvent['type'], data),
   });
   const mapResult = (completion: ReturnType<AgentLoop['run']>): Promise<AgentRunOutput> => (
-    completion.then((result) => ({
-      status: result.status,
-      sessionId: result.session.id,
-      session: result.session,
-    }))
+    completion.then((result) => {
+      const safeSession = mode === 'byok'
+        ? redactSecrets(result.session, [byokSecret]) as Session
+        : result.session;
+      return {
+        status: result.status,
+        sessionId: safeSession.id,
+        session: safeSession,
+      };
+    }, (error: unknown) => {
+      if (mode === 'byok') {
+        throw new LLMProviderError(safeProviderStatus(error));
+      }
+      throw error;
+    })
   );
   let activeCompletion = mapResult(loop.run(task, session.workspace));
+  let released = false;
+  const release = (): void => {
+    if (released) {
+      return;
+    }
+    released = true;
+    try {
+      byokResource?.release?.();
+    } finally {
+      byokResource = undefined;
+      byokSecret = '';
+      loop = undefined;
+    }
+  };
   return {
     completion: activeCompletion,
     continueAfterApproval: () => {
+      if (!loop) {
+        throw new Error('Agent run is no longer active');
+      }
       activeCompletion = mapResult(loop.continueAfterApproval(true));
       return activeCompletion;
     },
-    approve: (approved) => loop.handleApproval(approved),
+    approve: (approved) => loop?.handleApproval(approved),
     abort: async () => {
-      loop.abort();
+      loop?.abort();
       await activeCompletion.catch(() => undefined);
     },
+    release,
   };
 };

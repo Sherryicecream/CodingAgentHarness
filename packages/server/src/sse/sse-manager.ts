@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import { redactSecrets } from '../security/secret-redactor.js';
 
 export interface SSEEvent {
   type: 'loop_step' | 'tool_call' | 'guardrail' | 'feedback' | 'complete' | 'error';
@@ -8,13 +9,46 @@ export interface SSEEvent {
 
 export interface SSEManager {
   createConnection(sessionId: string, res: Response): void;
+  disconnect?(sessionId: string): void;
+  setSecrets?(sessionId: string, secrets: readonly string[]): void;
+  clearSecrets?(sessionId: string): void;
   push(sessionId: string, event: SSEEvent): void;
   close(sessionId: string): void;
 }
 
-export function createSSEManager(): SSEManager {
+export interface SecretAwareSSEManager extends SSEManager {
+  disconnect(sessionId: string): void;
+  setSecrets(sessionId: string, secrets: readonly string[]): void;
+  clearSecrets(sessionId: string): void;
+}
+
+export function createSSEManager(): SecretAwareSSEManager {
   const connections = new Map<string, Response>();
-  const buffers = new Map<string, SSEEvent[]>();
+  const buffers = new Map<string, string[]>();
+  const secretsBySession = new Map<string, readonly string[]>();
+
+  const serialize = (sessionId: string, event: SSEEvent): string => {
+    const safeEvent = redactSecrets({
+      ...event,
+      timestamp: event.timestamp.toISOString(),
+    }, secretsBySession.get(sessionId) ?? []);
+    try {
+      return `data: ${JSON.stringify(safeEvent)}\n\n`;
+    } catch {
+      return `data: ${JSON.stringify({
+        type: 'error',
+        data: { error: 'EVENT_SERIALIZATION_FAILED' },
+        timestamp: event.timestamp.toISOString(),
+      })}\n\n`;
+    }
+  };
+  const disconnect = (sessionId: string): void => {
+    const res = connections.get(sessionId);
+    if (res) {
+      res.end();
+      connections.delete(sessionId);
+    }
+  };
 
   return {
     createConnection(sessionId: string, res: Response) {
@@ -27,31 +61,39 @@ export function createSSEManager(): SSEManager {
 
       // Flush buffered events
       const buffer = buffers.get(sessionId) || [];
-      for (const event of buffer) {
-        res.write(`data: ${JSON.stringify({ ...event, timestamp: event.timestamp.toISOString() })}\n\n`);
+      for (const serializedEvent of buffer) {
+        res.write(serializedEvent);
       }
       buffers.delete(sessionId);
     },
 
+    setSecrets(sessionId: string, secrets: readonly string[]) {
+      secretsBySession.set(sessionId, [...secrets]);
+    },
+
+    clearSecrets(sessionId: string) {
+      secretsBySession.delete(sessionId);
+    },
+
+    disconnect,
+
     push(sessionId: string, event: SSEEvent) {
+      const serializedEvent = serialize(sessionId, event);
       const res = connections.get(sessionId);
       if (res) {
-        res.write(`data: ${JSON.stringify({ ...event, timestamp: event.timestamp.toISOString() })}\n\n`);
+        res.write(serializedEvent);
       } else {
         // Buffer event until connection is established
         const buffer = buffers.get(sessionId) || [];
-        buffer.push(event);
+        buffer.push(serializedEvent);
         buffers.set(sessionId, buffer);
       }
     },
 
     close(sessionId: string) {
-      const res = connections.get(sessionId);
-      if (res) {
-        res.end();
-        connections.delete(sessionId);
-      }
+      disconnect(sessionId);
       buffers.delete(sessionId);
+      secretsBySession.delete(sessionId);
     },
   };
 }
