@@ -177,13 +177,21 @@ export const createSessionRegistry = (
       const timestamp = now().getTime();
       expireDueSessions(timestamp);
       let removed = 0;
+      const failures: unknown[] = [];
       for (const [id, record] of records) {
         if (timestamp < record.expiresAt) {
           continue;
         }
-        await options.workspaceManager.remove(id);
-        records.delete(id);
-        removed += 1;
+        try {
+          await options.workspaceManager.remove(id);
+          records.delete(id);
+          removed += 1;
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length > 0) {
+        throw new AggregateError(failures, 'One or more expired sessions could not be removed');
       }
       return removed;
     },

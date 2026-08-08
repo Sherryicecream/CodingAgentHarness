@@ -1,6 +1,7 @@
-import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import * as nodeFs from 'node:fs/promises';
+import { mkdtemp, readdir, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   ConcurrentSessionLimitError,
@@ -8,7 +9,11 @@ import {
   InvalidSessionTransitionError,
   createSessionRegistry,
 } from '../../src/session/session-registry.js';
-import { createWorkspaceManager } from '../../src/session/workspace-manager.js';
+import {
+  createWorkspaceManager,
+  type WorkspaceFileSystem,
+  type WorkspaceManager,
+} from '../../src/session/workspace-manager.js';
 
 const temporaryPaths: string[] = [];
 
@@ -114,6 +119,89 @@ describe('createSessionRegistry', () => {
     await expect(realpath(failed.workspace)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(registry.getAuthorized(issued.id, 'client-a')).toBeNull();
     expect(registry.getAuthorized(running.id, 'client-a')).toBeNull();
+  });
+
+  it('continues sweeping later due workspaces after one removal fails', async () => {
+    const root = await createRoot();
+    let currentTime = new Date('2026-08-08T00:00:00.000Z');
+    let failedFirstRemoval = false;
+    const actualManager = createWorkspaceManager({ root });
+    const flakyManager: WorkspaceManager = {
+      create: (sessionId) => actualManager.create(sessionId),
+      async remove(sessionId) {
+        if (sessionId === 'first' && !failedFirstRemoval) {
+          failedFirstRemoval = true;
+          throw new Error('injected cleanup failure');
+        }
+        await actualManager.remove(sessionId);
+      },
+    };
+    const ids = ['first', 'second'];
+    const registry = createSessionRegistry({
+      workspaceManager: flakyManager,
+      now: () => new Date(currentTime),
+      idGenerator: () => ids.shift()!,
+    });
+    const first = await registry.issue('client-a');
+    const second = await registry.issue('client-a');
+    currentTime = new Date('2026-08-08T01:00:00.000Z');
+
+    await expect(registry.sweepExpired()).rejects.toBeInstanceOf(AggregateError);
+
+    expect(await realpath(first.workspace)).toBe(first.workspace);
+    await expect(realpath(second.workspace)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await registry.sweepExpired()).toBe(1);
+    await expect(realpath(first.workspace)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('retries an issued workspace after its final quarantine deletion fails', async () => {
+    const root = await createRoot();
+    let currentTime = new Date('2026-08-08T00:00:00.000Z');
+    let quarantineRoot: string | undefined;
+    let failFinalRemoval = true;
+    const fs: WorkspaceFileSystem = {
+      async mkdir(path, options) {
+        const result = options
+          ? await nodeFs.mkdir(path, options)
+          : await nodeFs.mkdir(path);
+        if (
+          dirname(path) === root
+          && basename(path).startsWith('.harness-quarantine-')
+        ) {
+          quarantineRoot = path;
+        }
+        return result;
+      },
+      lstat: (path, options) => nodeFs.lstat(path, options),
+      realpath: (path) => nodeFs.realpath(path),
+      rename: (oldPath, newPath) => nodeFs.rename(oldPath, newPath),
+      async rm(path, options) {
+        if (quarantineRoot && dirname(path) === quarantineRoot && failFinalRemoval) {
+          failFinalRemoval = false;
+          throw new Error('injected final quarantine deletion failure');
+        }
+        await nodeFs.rm(path, options);
+      },
+    };
+    const workspaceManager = createWorkspaceManager({ root, fs });
+    const registry = createSessionRegistry({
+      workspaceManager,
+      now: () => new Date(currentTime),
+      idGenerator: () => 'retryable-session',
+    });
+    const session = await registry.issue('client-a');
+    currentTime = new Date('2026-08-08T01:00:00.000Z');
+
+    await expect(registry.sweepExpired()).rejects.toBeInstanceOf(AggregateError);
+
+    await expect(realpath(session.workspace)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(quarantineRoot).toBeDefined();
+    const quarantinedEntries = await readdir(quarantineRoot!);
+    expect(quarantinedEntries).toHaveLength(1);
+    await expect(workspaceManager.remove(quarantinedEntries[0]!)).rejects.toThrow(/not issued/i);
+    expect(await registry.sweepExpired()).toBe(1);
+    expect(await readdir(quarantineRoot!)).toEqual([]);
+    expect(await registry.sweepExpired()).toBe(0);
   });
 
   it('rejects a duplicate start and permits only running sessions to terminate', async () => {

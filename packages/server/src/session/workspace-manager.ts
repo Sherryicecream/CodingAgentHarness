@@ -1,9 +1,19 @@
+import { randomUUID } from 'node:crypto';
 import * as nodeFs from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
+export interface WorkspaceStats {
+  readonly dev: bigint;
+  readonly ino: bigint;
+  isDirectory(): boolean;
+  isSymbolicLink(): boolean;
+}
+
 export interface WorkspaceFileSystem {
-  mkdir(path: string, options?: { recursive: true }): Promise<unknown>;
+  mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<unknown>;
+  lstat(path: string, options: { bigint: true }): Promise<WorkspaceStats>;
   realpath(path: string): Promise<string>;
+  rename(oldPath: string, newPath: string): Promise<void>;
   rm(path: string, options: { recursive: true; force: true }): Promise<void>;
 }
 
@@ -42,70 +52,229 @@ const errorCode = (error: unknown): string | undefined => (
     : undefined
 );
 
+interface CanonicalRoot {
+  readonly path: string;
+  readonly identity: string;
+  readonly quarantine: {
+    readonly path: string;
+    readonly identity: string;
+  };
+}
+
+interface IssuedWorkspace {
+  readonly location: 'issued';
+  readonly path: string;
+  readonly identity: string;
+}
+
+interface QuarantinedWorkspace {
+  readonly location: 'quarantined';
+  readonly path: string;
+  readonly identity: string;
+}
+
+type OwnedWorkspace = IssuedWorkspace | QuarantinedWorkspace;
+
+const identityOf = (stats: WorkspaceStats): string => `${stats.dev}:${stats.ino}`;
+
 export const createWorkspaceManager = (
   options: WorkspaceManagerOptions,
 ): WorkspaceManager => {
   const fs = options.fs ?? nodeFs;
   const configuredRoot = resolve(options.root);
-  const issuedPaths = new Map<string, string>();
-  let canonicalRoot: Promise<string> | undefined;
-  const getCanonicalRoot = (): Promise<string> => {
+  const issuedWorkspaces = new Map<string, OwnedWorkspace>();
+  let canonicalRoot: Promise<CanonicalRoot> | undefined;
+
+  const readDirectoryIdentity = async (path: string): Promise<string> => {
+    const stats = await fs.lstat(path, { bigint: true });
+    if (!stats.isDirectory() || stats.isSymbolicLink()) {
+      throw new Error('Workspace identity changed');
+    }
+    return identityOf(stats);
+  };
+
+  const assertIdentity = async (
+    path: string,
+    expectedIdentity: string,
+  ): Promise<void> => {
+    if (await readDirectoryIdentity(path) !== expectedIdentity) {
+      throw new Error('Workspace identity changed');
+    }
+  };
+
+  const getCanonicalRoot = (): Promise<CanonicalRoot> => {
     canonicalRoot ??= fs.mkdir(configuredRoot, { recursive: true })
       .then(() => fs.realpath(configuredRoot))
-      .then((path) => resolve(path));
+      .then(async (path) => {
+        const canonicalPath = resolve(path);
+        const rootIdentity = await readDirectoryIdentity(canonicalPath);
+        const quarantinePath = resolve(join(
+          canonicalPath,
+          `.harness-quarantine-${randomUUID()}`,
+        ));
+        assertDirectChild(canonicalPath, quarantinePath);
+        await fs.mkdir(quarantinePath, { mode: 0o700 });
+        const canonicalQuarantinePath = resolve(await fs.realpath(quarantinePath));
+        if (canonicalQuarantinePath !== quarantinePath) {
+          throw new Error('Private quarantine target changed during creation');
+        }
+        return {
+          path: canonicalPath,
+          identity: rootIdentity,
+          quarantine: {
+            path: canonicalQuarantinePath,
+            identity: await readDirectoryIdentity(canonicalQuarantinePath),
+          },
+        };
+      });
     return canonicalRoot;
+  };
+
+  const quarantine = async (
+    root: CanonicalRoot,
+    workspace: IssuedWorkspace,
+  ): Promise<QuarantinedWorkspace> => {
+    assertDirectChild(root.path, workspace.path);
+    await assertIdentity(root.path, root.identity);
+    assertDirectChild(root.path, root.quarantine.path);
+    await assertIdentity(root.quarantine.path, root.quarantine.identity);
+    await assertIdentity(workspace.path, workspace.identity);
+
+    const quarantinePath = resolve(join(
+      root.quarantine.path,
+      `${basename(workspace.path)}-${randomUUID()}`,
+    ));
+    assertDirectChild(root.quarantine.path, quarantinePath);
+    await fs.rename(workspace.path, quarantinePath);
+
+    return {
+      location: 'quarantined',
+      path: quarantinePath,
+      identity: workspace.identity,
+    };
+  };
+
+  const quarantinedWorkspaceExists = async (
+    root: CanonicalRoot,
+    workspace: QuarantinedWorkspace,
+  ): Promise<boolean> => {
+    assertDirectChild(root.path, root.quarantine.path);
+    assertDirectChild(root.quarantine.path, workspace.path);
+    await assertIdentity(root.path, root.identity);
+    await assertIdentity(root.quarantine.path, root.quarantine.identity);
+    try {
+      await assertIdentity(workspace.path, workspace.identity);
+      return true;
+    } catch (error) {
+      if (errorCode(error) === 'ENOENT') {
+        return false;
+      }
+      throw error;
+    }
+  };
+
+  const quarantineUnverifiedChild = async (
+    root: CanonicalRoot,
+    target: string,
+  ): Promise<void> => {
+    assertDirectChild(root.path, target);
+    await assertIdentity(root.path, root.identity);
+    await assertIdentity(root.quarantine.path, root.quarantine.identity);
+    const quarantinePath = resolve(join(
+      root.quarantine.path,
+      `unverified-${randomUUID()}`,
+    ));
+    assertDirectChild(root.quarantine.path, quarantinePath);
+    await fs.rename(target, quarantinePath);
+    await assertIdentity(root.path, root.identity);
+    await assertIdentity(root.quarantine.path, root.quarantine.identity);
+    await fs.rm(quarantinePath, { recursive: true, force: true });
   };
 
   return {
     async create(sessionId) {
       assertValidSessionId(sessionId);
-      if (issuedPaths.has(sessionId)) {
+      if (issuedWorkspaces.has(sessionId)) {
         throw new Error(`Workspace already issued for session id: ${sessionId}`);
       }
 
       const root = await getCanonicalRoot();
-      const target = resolve(join(root, sessionId));
-      assertDirectChild(root, target);
+      await assertIdentity(root.path, root.identity);
+      const target = resolve(join(root.path, sessionId));
+      assertDirectChild(root.path, target);
       await fs.mkdir(target);
 
-      const canonicalTarget = resolve(await fs.realpath(target));
-      assertDirectChild(root, canonicalTarget);
-      if (canonicalTarget !== target) {
-        throw new Error('Workspace target changed during creation');
-      }
+      let created: IssuedWorkspace | undefined;
+      try {
+        created = {
+          location: 'issued',
+          path: target,
+          identity: await readDirectoryIdentity(target),
+        };
+        const canonicalTarget = resolve(await fs.realpath(target));
+        assertDirectChild(root.path, canonicalTarget);
+        if (canonicalTarget !== target) {
+          throw new Error('Workspace target changed during creation');
+        }
+        await assertIdentity(root.path, root.identity);
+        await assertIdentity(target, created.identity);
 
-      issuedPaths.set(sessionId, canonicalTarget);
-      return canonicalTarget;
+        issuedWorkspaces.set(sessionId, created);
+        return canonicalTarget;
+      } catch (error) {
+        if (!created) {
+          try {
+            await quarantineUnverifiedChild(root, target);
+          } catch (cleanupError) {
+            throw new AggregateError(
+              [error, cleanupError],
+              'Workspace creation failed and unverified child isolation was incomplete',
+            );
+          }
+          throw error;
+        }
+        try {
+          const quarantined = await quarantine(root, created);
+          if (await quarantinedWorkspaceExists(root, quarantined)) {
+            await fs.rm(quarantined.path, { recursive: true, force: true });
+          }
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            'Workspace creation failed and rollback was incomplete',
+          );
+        }
+        throw error;
+      }
     },
 
     async remove(sessionId) {
       assertValidSessionId(sessionId);
-      const issuedTarget = issuedPaths.get(sessionId);
-      if (!issuedTarget) {
+      const issuedWorkspace = issuedWorkspaces.get(sessionId);
+      if (!issuedWorkspace) {
         throw new Error(`Workspace was not issued for session id: ${sessionId}`);
       }
 
       const root = await getCanonicalRoot();
-      assertDirectChild(root, issuedTarget);
-
-      let currentTarget: string;
-      try {
-        currentTarget = resolve(await fs.realpath(issuedTarget));
-      } catch (error) {
-        if (errorCode(error) !== 'ENOENT') {
+      let quarantined: QuarantinedWorkspace;
+      if (issuedWorkspace.location === 'issued') {
+        try {
+          quarantined = await quarantine(root, issuedWorkspace);
+        } catch (error) {
+          if (errorCode(error) === 'ENOENT') {
+            throw new Error('Issued workspace identity changed before removal');
+          }
           throw error;
         }
-        issuedPaths.delete(sessionId);
-        return;
+        issuedWorkspaces.set(sessionId, quarantined);
+      } else {
+        quarantined = issuedWorkspace;
       }
 
-      assertDirectChild(root, currentTarget);
-      if (currentTarget !== issuedTarget) {
-        throw new Error('Issued workspace target changed before removal');
+      if (await quarantinedWorkspaceExists(root, quarantined)) {
+        await fs.rm(quarantined.path, { recursive: true, force: true });
       }
-
-      await fs.rm(currentTarget, { recursive: true, force: true });
-      issuedPaths.delete(sessionId);
+      issuedWorkspaces.delete(sessionId);
     },
   };
 };

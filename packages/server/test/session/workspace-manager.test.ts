@@ -1,8 +1,12 @@
-import { mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import * as nodeFs from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createWorkspaceManager } from '../../src/session/workspace-manager.js';
+import {
+  createWorkspaceManager,
+  type WorkspaceFileSystem,
+} from '../../src/session/workspace-manager.js';
 
 const temporaryPaths: string[] = [];
 
@@ -10,6 +14,91 @@ const createTemporaryDirectory = async (prefix: string): Promise<string> => {
   const directory = await mkdtemp(join(tmpdir(), prefix));
   temporaryPaths.push(directory);
   return directory;
+};
+
+const createWorkspaceClientSwapFileSystem = (
+  root: string,
+  canonicalSubstitute?: { target: string; replacement: string },
+): {
+  fs: WorkspaceFileSystem;
+  replacementWasPreserved: () => Promise<boolean>;
+  quarantineIsPrivate: () => boolean;
+} => {
+  const target = canonicalSubstitute?.target ?? join(root, 'session-one');
+  let replacementSentinel: string | undefined;
+  let substituteCanonicalPath = true;
+  let quarantineRoot: string | undefined;
+  let quarantineMode: number | undefined;
+  let isolatedTarget: string | undefined;
+  const fs: WorkspaceFileSystem = {
+    async mkdir(path, options) {
+      const result = options
+        ? await nodeFs.mkdir(path, options)
+        : await nodeFs.mkdir(path);
+      if (
+        dirname(path) === root
+        && basename(path).startsWith('.harness-quarantine-')
+      ) {
+        quarantineRoot = path;
+        quarantineMode = options?.mode;
+      }
+      return result;
+    },
+    async lstat(path, options) {
+      const stats = await nodeFs.lstat(path, options);
+      if (
+        quarantineRoot
+        && isolatedTarget
+        && dirname(path) === quarantineRoot
+        && !replacementSentinel
+      ) {
+        // Model the strongest operation available to a workspace client: it can
+        // replace only its exposed workspace path, not the private quarantine.
+        await nodeFs.mkdir(isolatedTarget);
+        replacementSentinel = join(isolatedTarget, 'keep.txt');
+        await nodeFs.writeFile(replacementSentinel, 'unowned');
+      }
+      return stats;
+    },
+    async realpath(path) {
+      const canonicalPath = await nodeFs.realpath(path);
+      if (
+        canonicalSubstitute
+        && path === canonicalSubstitute.target
+        && substituteCanonicalPath
+      ) {
+        substituteCanonicalPath = false;
+        return canonicalSubstitute.replacement;
+      }
+      return canonicalPath;
+    },
+    async rename(oldPath, newPath) {
+      await nodeFs.rename(oldPath, newPath);
+      if (oldPath === target && quarantineRoot && dirname(newPath) === quarantineRoot) {
+        isolatedTarget = oldPath;
+      }
+    },
+    rm: (path, options) => nodeFs.rm(path, options),
+  };
+
+  return {
+    fs,
+    async replacementWasPreserved() {
+      if (!replacementSentinel) {
+        return false;
+      }
+      try {
+        return await nodeFs.readFile(replacementSentinel, 'utf8') === 'unowned';
+      } catch {
+        return false;
+      }
+    },
+    quarantineIsPrivate() {
+      return quarantineRoot !== undefined
+        && dirname(quarantineRoot) === root
+        && quarantineMode === 0o700;
+    },
+  };
 };
 
 afterEach(async () => {
@@ -64,6 +153,93 @@ describe('createWorkspaceManager', () => {
     expect(await readFile(sentinel, 'utf8')).toBe('owned elsewhere');
   });
 
+  it('rolls back its new child when post-creation validation fails', async () => {
+    const root = await createTemporaryDirectory('harness-workspaces-');
+    const outside = await createTemporaryDirectory('harness-outside-');
+    const target = join(root, 'session-one');
+    let substituteCanonicalPath = true;
+    const fs: WorkspaceFileSystem = {
+      mkdir: (path, options) => options
+        ? nodeFs.mkdir(path, options)
+        : nodeFs.mkdir(path),
+      lstat: (path, options) => nodeFs.lstat(path, options),
+      async realpath(path) {
+        const canonicalPath = await nodeFs.realpath(path);
+        if (path === target && substituteCanonicalPath) {
+          substituteCanonicalPath = false;
+          return outside;
+        }
+        return canonicalPath;
+      },
+      rename: (oldPath, newPath) => nodeFs.rename(oldPath, newPath),
+      rm: (path, options) => nodeFs.rm(path, options),
+    };
+    const manager = createWorkspaceManager({ root, fs });
+
+    await expect(manager.create('session-one')).rejects.toThrow(/outside|changed/i);
+
+    await expect(realpath(target)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await realpath(outside)).toBe(outside);
+  });
+
+  it('does not delete a client replacement swapped after the final removal identity check', async () => {
+    const root = await createTemporaryDirectory('harness-workspaces-');
+    const attack = createWorkspaceClientSwapFileSystem(root);
+    const manager = createWorkspaceManager({ root, fs: attack.fs });
+    await manager.create('session-one');
+
+    await manager.remove('session-one');
+
+    expect(attack.quarantineIsPrivate()).toBe(true);
+    expect(await attack.replacementWasPreserved()).toBe(true);
+  });
+
+  it('does not delete a client replacement swapped after the rollback identity check', async () => {
+    const root = await createTemporaryDirectory('harness-workspaces-');
+    const outside = await createTemporaryDirectory('harness-outside-');
+    const target = join(root, 'session-one');
+    const attack = createWorkspaceClientSwapFileSystem(root, {
+      target,
+      replacement: outside,
+    });
+    const manager = createWorkspaceManager({ root, fs: attack.fs });
+
+    await expect(manager.create('session-one')).rejects.toThrow(/outside|changed/i);
+
+    expect(attack.quarantineIsPrivate()).toBe(true);
+    expect(await attack.replacementWasPreserved()).toBe(true);
+  });
+
+  it('fail-closed quarantines a new child when its first identity read fails', async () => {
+    const root = await createTemporaryDirectory('harness-workspaces-');
+    const target = join(root, 'session-one');
+    let failTargetIdentity = true;
+    const fs: WorkspaceFileSystem = {
+      mkdir: (path, options) => options
+        ? nodeFs.mkdir(path, options)
+        : nodeFs.mkdir(path),
+      async lstat(path, options) {
+        if (path === target && failTargetIdentity) {
+          failTargetIdentity = false;
+          throw new Error('injected identity read failure');
+        }
+        return nodeFs.lstat(path, options);
+      },
+      realpath: (path) => nodeFs.realpath(path),
+      rename: (oldPath, newPath) => nodeFs.rename(oldPath, newPath),
+      rm: (path, options) => nodeFs.rm(path, options),
+    };
+    const manager = createWorkspaceManager({ root, fs });
+
+    await expect(manager.create('session-one')).rejects.toThrow(/identity read failure/i);
+    await expect(realpath(target)).rejects.toMatchObject({ code: 'ENOENT' });
+    const quarantine = (await readdir(root)).find((entry) => (
+      entry.startsWith('.harness-quarantine-')
+    ));
+    expect(quarantine).toBeDefined();
+    expect(await readdir(join(root, quarantine!))).toEqual([]);
+  });
+
   it('refuses recursive removal when an issued child is replaced with an external link', async () => {
     const root = await createTemporaryDirectory('harness-workspaces-');
     const outside = await createTemporaryDirectory('harness-outside-');
@@ -77,6 +253,85 @@ describe('createWorkspaceManager', () => {
 
     await expect(manager.remove('session-one')).rejects.toThrow(/outside|changed/i);
     expect(await readFile(sentinel, 'utf8')).toBe('safe');
+  });
+
+  it('refuses removal when an issued child is replaced by a new directory at the same path', async () => {
+    const root = await createTemporaryDirectory('harness-workspaces-');
+    const manager = createWorkspaceManager({ root });
+    const issued = await manager.create('session-one');
+    const original = `${issued}-original`;
+    await rename(issued, original);
+    await mkdir(issued);
+    const sentinel = join(issued, 'keep.txt');
+    await writeFile(sentinel, 'unowned');
+
+    await expect(manager.remove('session-one')).rejects.toThrow(/changed|identity/i);
+
+    expect(await readFile(sentinel, 'utf8')).toBe('unowned');
+    expect(await realpath(original)).toBe(original);
+  });
+
+  it('uses lossless bigint identities that cannot collapse above the safe integer range', async () => {
+    const root = await createTemporaryDirectory('harness-workspaces-');
+    const target = join(root, 'session-one');
+    let originalPhysicalInode: bigint | undefined;
+    const firstIdentity = 9_007_199_254_740_992n;
+    const replacementIdentity = firstIdentity + 1n;
+    expect(Number(firstIdentity)).toBe(Number(replacementIdentity));
+
+    const fs: WorkspaceFileSystem = {
+      mkdir: (path, options) => options
+        ? nodeFs.mkdir(path, options)
+        : nodeFs.mkdir(path),
+      async lstat(path, options) {
+        if (options.bigint !== true) {
+          throw new Error('lossless identity required');
+        }
+        const stats = await nodeFs.lstat(path, { bigint: true });
+        if (path === root) {
+          return {
+            dev: 1n,
+            ino: 1n,
+            isDirectory: () => stats.isDirectory(),
+            isSymbolicLink: () => stats.isSymbolicLink(),
+          };
+        }
+        if (
+          dirname(path) === root
+          && basename(path).startsWith('.harness-quarantine-')
+        ) {
+          return {
+            dev: 1n,
+            ino: 2n,
+            isDirectory: () => stats.isDirectory(),
+            isSymbolicLink: () => stats.isSymbolicLink(),
+          };
+        }
+
+        originalPhysicalInode ??= stats.ino;
+        const identity = stats.ino === originalPhysicalInode
+          ? firstIdentity
+          : replacementIdentity;
+        return {
+          dev: 2n,
+          ino: identity,
+          isDirectory: () => stats.isDirectory(),
+          isSymbolicLink: () => stats.isSymbolicLink(),
+        };
+      },
+      realpath: (path) => nodeFs.realpath(path),
+      rename: (oldPath, newPath) => nodeFs.rename(oldPath, newPath),
+      rm: (path, options) => nodeFs.rm(path, options),
+    };
+    const manager = createWorkspaceManager({ root, fs });
+    const issued = await manager.create('session-one');
+    await rename(issued, `${issued}-original`);
+    await mkdir(issued);
+    const sentinel = join(issued, 'keep.txt');
+    await writeFile(sentinel, 'unowned');
+
+    await expect(manager.remove('session-one')).rejects.toThrow(/identity/i);
+    expect(await readFile(sentinel, 'utf8')).toBe('unowned');
   });
 
   it('recursively removes only the issued workspace', async () => {
