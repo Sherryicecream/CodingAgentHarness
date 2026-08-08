@@ -1,11 +1,15 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import request from 'supertest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp, type AppOptions } from '../../src/app.js';
+import { createSessionRegistry, type SessionRegistry } from '../../src/session/session-registry.js';
+import { createWorkspaceManager } from '../../src/session/workspace-manager.js';
+import type { SSEManager } from '../../src/sse/sse-manager.js';
 
 const temporaryPaths: string[] = [];
+const createdApps: Array<{ close?: () => void }> = [];
 
 const createWorkspaceRoot = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'harness-public-routes-'));
@@ -14,16 +18,23 @@ const createWorkspaceRoot = async (): Promise<string> => {
 };
 
 const pendingRun = (): Promise<never> => new Promise(() => undefined);
+const nextTurn = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
-const createPublicApp = async (overrides: Partial<AppOptions> = {}) => createApp({
-  mode: 'public',
-  workspaceRoot: await createWorkspaceRoot(),
-  agentRun: pendingRun,
-  ...overrides,
-});
+const createPublicApp = async (overrides: Partial<AppOptions> = {}) => {
+  const app = createApp({
+    mode: 'public',
+    workspaceRoot: await createWorkspaceRoot(),
+    agentRun: pendingRun,
+    ...overrides,
+  });
+  createdApps.push(app);
+  return app;
+};
 
 afterEach(async () => {
+  createdApps.splice(0).forEach((app) => app.close?.());
   vi.unstubAllEnvs();
+  vi.useRealTimers();
   await Promise.all(temporaryPaths.splice(0).map((path) => rm(path, {
     recursive: true,
     force: true,
@@ -53,6 +64,19 @@ describe('public agent request boundaries', () => {
     });
     expect(response.body).not.toHaveProperty('workspace');
     expect(response.body).not.toHaveProperty('clientKey');
+  });
+
+  it('accepts session creation with no JSON body as well as an empty object', async () => {
+    const ids = ['no-body-session', 'empty-object-session'];
+    const app = await createPublicApp({ idGenerator: () => ids.shift()! });
+
+    const withoutBody = await request(app).post('/api/agent/sessions');
+    const withEmptyObject = await request(app).post('/api/agent/sessions').send({});
+
+    expect(withoutBody.status).toBe(201);
+    expect(withoutBody.body.sessionId).toBe('no-body-session');
+    expect(withEmptyObject.status).toBe(201);
+    expect(withEmptyObject.body.sessionId).toBe('empty-object-session');
   });
 
   it.each([
@@ -96,6 +120,61 @@ describe('public agent request boundaries', () => {
     expect(wrongOwner.body).toEqual(unknown.body);
   });
 
+  it('uses an explicitly configured proxy hop for ownership and per-client rate limits', async () => {
+    vi.stubEnv('HARNESS_TRUST_PROXY', '1');
+    const app = await createPublicApp({
+      idGenerator: () => 'proxy-owned-session',
+      runRateLimit: { limit: 1, windowMs: 60_000 },
+    });
+    await request(app)
+      .post('/api/agent/sessions')
+      .set('X-Forwarded-For', '203.0.113.10')
+      .send({});
+
+    const wrongOwner = await request(app)
+      .post('/api/agent/run')
+      .set('X-Forwarded-For', '203.0.113.11')
+      .send({ sessionId: 'proxy-owned-session', task: 'work', mode: 'demo' });
+    const sameClientLimited = await request(app)
+      .post('/api/agent/run')
+      .set('X-Forwarded-For', '203.0.113.11')
+      .send({ sessionId: 'missing', task: 'again', mode: 'demo' });
+    const otherClient = await request(app)
+      .post('/api/agent/run')
+      .set('X-Forwarded-For', '203.0.113.12')
+      .send({ sessionId: 'missing', task: 'independent', mode: 'demo' });
+
+    expect(wrongOwner.status).toBe(404);
+    expect(sameClientLimited.status).toBe(429);
+    expect(otherClient.status).toBe(404);
+  });
+
+  it('accepts a restricted proxy allowlist without enabling permissive trust', async () => {
+    const app = await createPublicApp({
+      idGenerator: () => 'allowlist-owned-session',
+      trustProxy: ['loopback'],
+    });
+    await request(app)
+      .post('/api/agent/sessions')
+      .set('X-Forwarded-For', '203.0.113.20')
+      .send({});
+
+    const wrongOwner = await request(app)
+      .post('/api/agent/run')
+      .set('X-Forwarded-For', '203.0.113.21')
+      .send({ sessionId: 'allowlist-owned-session', task: 'work', mode: 'demo' });
+
+    expect(wrongOwner.status).toBe(404);
+  });
+
+  it.each([
+    [true],
+    ['true'],
+  ])('rejects permissive trust-proxy configuration %j', (trustProxy) => {
+    expect(() => createApp({ mode: 'public', trustProxy: trustProxy as never }))
+      .toThrow(/trust proxy/i);
+  });
+
   it('rejects a duplicate run for the same session', async () => {
     const app = await createPublicApp({ idGenerator: () => 'duplicate-session' });
     await request(app).post('/api/agent/sessions').send({});
@@ -111,6 +190,129 @@ describe('public agent request boundaries', () => {
     expect(first.body).toEqual({ sessionId: 'duplicate-session', status: 'started' });
     expect(duplicate.status).toBe(409);
     expect(duplicate.body).toEqual({ error: 'SESSION_ALREADY_RUNNING' });
+  });
+
+  it('does not approve or reject a run until it is actually blocked', async () => {
+    let approvalCalls = 0;
+    let abortCalls = 0;
+    const app = await createPublicApp({
+      idGenerator: () => 'still-running',
+      agentRun: () => ({
+        completion: pendingRun(),
+        approve: () => { approvalCalls += 1; },
+        abort: () => { abortCalls += 1; },
+      }),
+    });
+    await request(app).post('/api/agent/sessions').send({});
+    await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'still-running', task: 'work', mode: 'demo' });
+
+    const rejected = await request(app)
+      .post('/api/agent/reject')
+      .send({ sessionId: 'still-running' });
+
+    expect(rejected.status).toBe(409);
+    expect(rejected.body).toEqual({ error: 'SESSION_NOT_BLOCKED' });
+    expect(approvalCalls).toBe(0);
+    expect(abortCalls).toBe(0);
+  });
+
+  it('aborts and cleans a blocked run exactly once when rejected', async () => {
+    let resolveCompletion!: (value: { status: string }) => void;
+    const completion = new Promise<{ status: string }>((resolve) => {
+      resolveCompletion = resolve;
+    });
+    let approvalCalls = 0;
+    let abortCalls = 0;
+    let closeCalls = 0;
+    const sseManager: SSEManager = {
+      createConnection: () => undefined,
+      push: () => undefined,
+      close: () => { closeCalls += 1; },
+    };
+    const app = await createPublicApp({
+      idGenerator: () => 'blocked-run',
+      sseManager,
+      agentRun: () => ({
+        completion,
+        approve: () => { approvalCalls += 1; },
+        abort: () => { abortCalls += 1; },
+      }),
+    });
+    await request(app).post('/api/agent/sessions').send({});
+    await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'blocked-run', task: 'work', mode: 'demo' });
+    resolveCompletion({ status: 'blocked' });
+    await nextTurn();
+
+    const rejected = await request(app)
+      .post('/api/agent/reject')
+      .send({ sessionId: 'blocked-run' });
+    const repeated = await request(app)
+      .post('/api/agent/reject')
+      .send({ sessionId: 'blocked-run' });
+
+    expect(rejected.status).toBe(200);
+    expect(repeated.status).toBe(404);
+    expect(approvalCalls).toBe(1);
+    expect(abortCalls).toBe(1);
+    expect(closeCalls).toBe(1);
+  });
+
+  it('cleans a terminal run without a second transition or unhandled rejection', async () => {
+    const root = await createWorkspaceRoot();
+    const actualRegistry = createSessionRegistry({
+      workspaceManager: createWorkspaceManager({ root }),
+      idGenerator: () => 'terminal-race',
+    });
+    let completeCalls = 0;
+    let failCalls = 0;
+    const registry: SessionRegistry = {
+      ...actualRegistry,
+      complete() {
+        completeCalls += 1;
+        throw new Error('injected completion transition failure');
+      },
+      fail() {
+        failCalls += 1;
+        throw new Error('a second terminal transition must not run');
+      },
+    };
+    let closeCalls = 0;
+    const warnings: unknown[] = [];
+    const app = createApp({
+      mode: 'public',
+      sessionRegistry: registry,
+      sseManager: {
+        createConnection: () => undefined,
+        push: () => undefined,
+        close: () => { closeCalls += 1; },
+      },
+      agentRun: async () => ({ status: 'completed' }),
+      logger: {
+        error: () => undefined,
+        info: () => undefined,
+        warn: (value) => { warnings.push(value); },
+      },
+    });
+    createdApps.push(app);
+    await request(app).post('/api/agent/sessions').send({});
+
+    await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'terminal-race', task: 'work', mode: 'demo' });
+    await nextTurn();
+
+    const noLongerActive = await request(app)
+      .post('/api/agent/reject')
+      .send({ sessionId: 'terminal-race' });
+    expect(noLongerActive.status).toBe(404);
+    expect(completeCalls).toBe(1);
+    expect(failCalls).toBe(0);
+    expect(closeCalls).toBe(1);
+    expect(warnings).toContain('SESSION_TERMINAL_TRANSITION_FAILED');
   });
 
   it('maps per-client concurrent run excess to 429', async () => {
@@ -163,9 +365,129 @@ describe('public agent request boundaries', () => {
     expect(limited.body).toEqual({ error: 'RUN_RATE_LIMIT' });
   });
 
+  it('rate limits anonymous session issuance to bound workspace creation', async () => {
+    const app = await createPublicApp({
+      sessionRateLimit: { limit: 1, windowMs: 60_000 },
+    });
+
+    const first = await request(app).post('/api/agent/sessions').send({});
+    const limited = await request(app).post('/api/agent/sessions').send({});
+
+    expect(first.status).toBe(201);
+    expect(limited.status).toBe(429);
+    expect(limited.body).toEqual({ error: 'SESSION_RATE_LIMIT' });
+  });
+
+  it('periodically removes expired session records and their workspaces', async () => {
+    let currentTime = new Date('2026-08-08T00:00:00.000Z');
+    const root = await createWorkspaceRoot();
+    let tick: (() => void | Promise<void>) | undefined;
+    const app = createApp({
+      mode: 'public',
+      workspaceRoot: root,
+      idGenerator: () => 'scheduled-expiry',
+      now: () => new Date(currentTime),
+      agentRun: pendingRun,
+      sweepIntervalMs: 1_000,
+      intervalScheduler: {
+        setInterval(callback) {
+          tick = callback;
+          return { unref: () => undefined };
+        },
+        clearInterval: () => undefined,
+      },
+    });
+    createdApps.push(app);
+    await request(app).post('/api/agent/sessions').send({});
+    const workspace = join(root, 'scheduled-expiry');
+    expect(await realpath(workspace)).toBe(workspace);
+
+    currentTime = new Date('2026-08-08T01:00:00.000Z');
+    expect(tick).toBeDefined();
+    await tick!();
+
+    await expect(realpath(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
+    const expired = await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'scheduled-expiry', task: 'work', mode: 'demo' });
+    expect(expired.status).toBe(404);
+  });
+
+  it('reports a failed sweep, retries on the next tick, and closes its timer', async () => {
+    const root = await createWorkspaceRoot();
+    const actualRegistry = createSessionRegistry({
+      workspaceManager: createWorkspaceManager({ root }),
+    });
+    let sweepAttempts = 0;
+    const registry: SessionRegistry = {
+      ...actualRegistry,
+      async sweepExpired() {
+        sweepAttempts += 1;
+        if (sweepAttempts === 1) {
+          throw new Error('injected sweep failure');
+        }
+        return 0;
+      },
+    };
+    let tick: (() => void | Promise<void>) | undefined;
+    let cleared = false;
+    let unrefCalled = false;
+    const warnings: unknown[] = [];
+    const app = createApp({
+      mode: 'public',
+      sessionRegistry: registry,
+      intervalScheduler: {
+        setInterval(callback) {
+          tick = callback;
+          return { unref: () => { unrefCalled = true; } };
+        },
+        clearInterval() {
+          cleared = true;
+        },
+      },
+      logger: {
+        error: () => undefined,
+        info: () => undefined,
+        warn: (value) => { warnings.push(value); },
+      },
+    });
+    createdApps.push(app);
+
+    expect(tick).toBeDefined();
+    await tick!();
+    await tick!();
+    app.close();
+
+    expect(sweepAttempts).toBe(2);
+    expect(warnings).toEqual(['SESSION_SWEEP_FAILED']);
+    expect(unrefCalled).toBe(true);
+    expect(cleared).toBe(true);
+  });
+
   it('applies deployment rate-limit overrides from the environment', async () => {
     vi.stubEnv('HARNESS_RUN_RATE_LIMIT', '1');
     vi.stubEnv('HARNESS_RUN_RATE_WINDOW_MS', '60000');
+    const app = await createPublicApp();
+
+    const first = await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'missing', task: 'first', mode: 'demo' });
+    const limited = await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'missing', task: 'second', mode: 'demo' });
+
+    expect(first.status).toBe(404);
+    expect(limited.status).toBe(429);
+  });
+
+  it.each([
+    ['invalid'],
+    ['0'],
+    ['-1'],
+    ['2147483648'],
+  ])('falls back safely for invalid rate-limit window %s', async (windowMs) => {
+    vi.stubEnv('HARNESS_RUN_RATE_LIMIT', '1');
+    vi.stubEnv('HARNESS_RUN_RATE_WINDOW_MS', windowMs);
     const app = await createPublicApp();
 
     const first = await request(app)

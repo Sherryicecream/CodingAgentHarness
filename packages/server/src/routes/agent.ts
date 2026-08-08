@@ -13,6 +13,8 @@ import {
   createStopCondition,
   createTestRunner,
   type AgentLoop,
+  type Session,
+  type SessionStore,
 } from '@harness/core';
 import { createPolicyToolRegistry } from '../agent/tool-registry-factory.js';
 import type { CredentialStore } from '../credential-store.js';
@@ -28,6 +30,7 @@ import type { SSEEvent, SSEManager } from '../sse/sse-manager.js';
 
 const DEFAULT_RUN_RATE_WINDOW_MS = 60 * 60 * 1_000;
 const DEFAULT_RUN_RATE_LIMIT = 20;
+const DEFAULT_SESSION_RATE_LIMIT = 20;
 const MAX_TASK_LENGTH = 1_000;
 const RUN_FIELDS = new Set(['sessionId', 'task', 'mode', 'apiKey']);
 
@@ -47,6 +50,7 @@ export interface AgentRunInput {
 export interface AgentRunOutput {
   readonly status: string;
   readonly sessionId?: string;
+  readonly session?: Session;
 }
 
 export interface AgentRunHandle {
@@ -68,6 +72,9 @@ export interface AgentRouterDependencies {
   readonly fetchImpl?: typeof fetch;
   readonly credentialStore: CredentialStore;
   readonly runRateLimit?: RunRateLimitOptions;
+  readonly sessionRateLimit?: RunRateLimitOptions;
+  readonly logger?: Pick<Console, 'warn'>;
+  readonly sessionStore?: SessionStore;
 }
 
 const normalizeClientKey = (req: Request): string => {
@@ -118,9 +125,63 @@ export const createAgentRouter = (
 ): Router => {
   const router = Router();
   const now = dependencies.now ?? (() => new Date());
-  const activeRuns = new Map<string, AgentRunHandle>();
+  const logger = dependencies.logger ?? console;
+  interface ActiveRun {
+    readonly session: PublicSession;
+    readonly clientKey: string;
+    readonly handle: AgentRunHandle;
+    phase: 'running' | 'blocked' | 'terminal';
+  }
+  const activeRuns = new Map<string, ActiveRun>();
   const emit = (sessionId: string, type: SSEEvent['type'], data: unknown): void => {
     dependencies.sseManager.push(sessionId, { type, data, timestamp: now() });
+  };
+  const cleanupRun = (active: ActiveRun): void => {
+    if (activeRuns.get(active.session.id) === active) {
+      activeRuns.delete(active.session.id);
+    }
+    try {
+      dependencies.sseManager.close(active.session.id);
+    } catch {
+      logger.warn('SESSION_SSE_CLOSE_FAILED');
+    }
+  };
+  const finalizeRun = async (
+    active: ActiveRun,
+    requestedOutcome: 'completed' | 'failed',
+    result?: AgentRunOutput | void,
+  ): Promise<void> => {
+    if (active.phase === 'terminal') {
+      return;
+    }
+    active.phase = 'terminal';
+    try {
+      let outcome = requestedOutcome;
+      if (outcome === 'completed' && dependencies.sessionStore && result?.session) {
+        try {
+          await dependencies.sessionStore.save(result.session);
+        } catch {
+          logger.warn('SESSION_HISTORY_SAVE_FAILED');
+          outcome = 'failed';
+        }
+      }
+      try {
+        if (outcome === 'completed') {
+          dependencies.sessionRegistry.complete(active.session.id, active.clientKey);
+          emit(active.session.id, 'complete', {
+            status: result?.status ?? 'completed',
+            sessionId: result?.sessionId ?? active.session.id,
+          });
+        } else {
+          dependencies.sessionRegistry.fail(active.session.id, active.clientKey);
+          emit(active.session.id, 'error', { error: 'AGENT_RUN_FAILED' });
+        }
+      } catch {
+        logger.warn('SESSION_TERMINAL_TRANSITION_FAILED');
+      }
+    } finally {
+      cleanupRun(active);
+    }
   };
 
   const runLimiter = rateLimit({
@@ -133,7 +194,17 @@ export const createAgentRouter = (
     },
   });
 
-  router.post('/sessions', async (req: Request, res: Response) => {
+  const sessionLimiter = rateLimit({
+    windowMs: dependencies.sessionRateLimit?.windowMs ?? DEFAULT_RUN_RATE_WINDOW_MS,
+    limit: dependencies.sessionRateLimit?.limit ?? DEFAULT_SESSION_RATE_LIMIT,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    handler: (_req, res) => {
+      res.status(429).json({ error: 'SESSION_RATE_LIMIT' });
+    },
+  });
+
+  router.post('/sessions', sessionLimiter, async (req: Request, res: Response) => {
     if (!isPlainObject(req.body) || Object.keys(req.body).length !== 0) {
       res.status(400).json({ error: 'INVALID_SESSION_REQUEST' });
       return;
@@ -208,26 +279,27 @@ export const createAgentRouter = (
       return;
     }
 
-    activeRuns.set(session.id, handle);
+    const active: ActiveRun = {
+      session,
+      clientKey,
+      handle,
+      phase: 'running',
+    };
+    activeRuns.set(session.id, active);
     emit(session.id, 'loop_step', { phase: 'starting', mode: input.mode });
-    void handle.completion.then((result) => {
+    void handle.completion.then(async (result) => {
+      if (active.phase === 'terminal') {
+        return;
+      }
       if (result?.status === 'blocked') {
+        active.phase = 'blocked';
         emit(session.id, 'complete', { status: result.status, sessionId: result.sessionId });
         return;
       }
-      dependencies.sessionRegistry.complete(session.id, clientKey);
-      emit(session.id, 'complete', {
-        status: result?.status ?? 'completed',
-        sessionId: result?.sessionId ?? session.id,
-      });
-      activeRuns.delete(session.id);
-      dependencies.sseManager.close(session.id);
-    }).catch(() => {
-      dependencies.sessionRegistry.fail(session.id, clientKey);
-      emit(session.id, 'error', { error: 'AGENT_RUN_FAILED' });
-      activeRuns.delete(session.id);
-      dependencies.sseManager.close(session.id);
-    });
+      await finalizeRun(active, 'completed', result);
+    }, async () => {
+      await finalizeRun(active, 'failed');
+    }).catch(() => logger.warn('SESSION_FINALIZATION_FAILED'));
 
     res.status(202).json({ sessionId: session.id, status: 'started' });
   });
@@ -280,7 +352,10 @@ export const createAgentRouter = (
     }
   });
 
-  const handleApproval = (approved: boolean) => (req: Request, res: Response): void => {
+  const handleApproval = (approved: boolean) => async (
+    req: Request,
+    res: Response,
+  ): Promise<void> => {
     const sessionId = isPlainObject(req.body) ? req.body.sessionId : undefined;
     if (typeof sessionId !== 'string') {
       res.status(400).json({ error: 'INVALID_APPROVAL_REQUEST' });
@@ -291,17 +366,38 @@ export const createAgentRouter = (
       res.status(404).json({ error: 'SESSION_NOT_FOUND' });
       return;
     }
-    const handle = activeRuns.get(sessionId);
-    if (!handle?.approve) {
+    const active = activeRuns.get(sessionId);
+    if (!active?.handle.approve) {
       res.status(404).json({ error: 'SESSION_NOT_FOUND' });
       return;
     }
-    handle.approve(approved);
-    emit(sessionId, 'guardrail', { approved, sessionId });
+    if (active.phase !== 'blocked') {
+      res.status(409).json({ error: 'SESSION_NOT_BLOCKED' });
+      return;
+    }
     if (!approved) {
-      dependencies.sessionRegistry.fail(sessionId, clientKey);
-      activeRuns.delete(sessionId);
-      dependencies.sseManager.close(sessionId);
+      try {
+        active.handle.abort?.();
+      } catch {
+        logger.warn('SESSION_ABORT_FAILED');
+      }
+      try {
+        active.handle.approve(false);
+      } catch {
+        logger.warn('SESSION_APPROVAL_FAILED');
+      }
+      emit(sessionId, 'guardrail', { approved: false, sessionId });
+      await finalizeRun(active, 'failed');
+    } else {
+      try {
+        active.handle.approve(true);
+        active.phase = 'running';
+        emit(sessionId, 'guardrail', { approved: true, sessionId });
+      } catch {
+        logger.warn('SESSION_APPROVAL_FAILED');
+        res.status(500).json({ error: 'APPROVAL_FAILED' });
+        return;
+      }
     }
     res.json({ sessionId, status: approved ? 'approved' : 'rejected' });
   };
@@ -362,6 +458,7 @@ export const createDefaultAgentRun = (
     completion: loop.run(task, session.workspace).then((result) => ({
       status: result.status,
       sessionId: result.session.id,
+      session: result.session,
     })),
     approve: (approved) => loop.handleApproval(approved),
     abort: () => loop.abort(),
