@@ -1,4 +1,5 @@
 import * as nodeFs from 'node:fs/promises';
+import * as nodeSyncFs from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -140,6 +141,105 @@ describe('createWorkspaceManager', () => {
     expect(await readFile(join(issued, 'demo.ts'), 'utf8')).toBe('corrected');
   });
 
+  it('rejects nested file paths so the commit target is always a direct child', async () => {
+    const root = await createTemporaryDirectory('harness-workspaces-');
+    const manager = createWorkspaceManager({ root });
+    const issued = await manager.create('session-one');
+
+    await expect(manager.writeIssuedFile('session-one', 'nested/demo.ts', 'unsafe'))
+      .rejects.toThrow(/direct child|file name|nested/i);
+    await expect(readFile(join(issued, 'nested', 'demo.ts'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not yield between the final target check and descriptor commit', async () => {
+    const root = await createTemporaryDirectory('harness-workspaces-');
+    const outside = await createTemporaryDirectory('harness-outside-');
+    const sentinel = join(outside, 'keep.txt');
+    await writeFile(sentinel, 'safe');
+    let scheduledSwap: Promise<void> | undefined;
+    let target = '';
+    const commitFs = {
+      lstatSync: nodeSyncFs.lstatSync,
+      openSync(path: nodeSyncFs.PathLike, flags: number, mode?: number) {
+        if (String(path) === target && !scheduledSwap) {
+          scheduledSwap = Promise.resolve().then(async () => {
+            await rename(target, `${target}-committed`);
+            await symlink(
+              outside,
+              target,
+              process.platform === 'win32' ? 'junction' : 'dir',
+            );
+          });
+        }
+        return nodeSyncFs.openSync(path, flags, mode);
+      },
+      fstatSync: nodeSyncFs.fstatSync,
+      ftruncateSync: nodeSyncFs.ftruncateSync,
+      writeSync: nodeSyncFs.writeSync,
+      fsyncSync: nodeSyncFs.fsyncSync,
+      closeSync: nodeSyncFs.closeSync,
+    };
+    const manager = createWorkspaceManager({ root, commitFs });
+    const issued = await manager.create('session-one');
+    target = join(issued, 'demo.ts');
+
+    await manager.writeIssuedFile('session-one', 'demo.ts', 'committed safely');
+    await scheduledSwap;
+
+    expect(scheduledSwap).toBeDefined();
+    expect(await readFile(`${target}-committed`, 'utf8')).toBe('committed safely');
+    expect(await readFile(sentinel, 'utf8')).toBe('safe');
+  });
+
+  it('aborts after deferred preparation without entering the synchronous commit', async () => {
+    const root = await createTemporaryDirectory('harness-workspaces-');
+    let issued = '';
+    let deferWorkspaceIdentity = false;
+    let enteredPreparation!: () => void;
+    const preparationStarted = new Promise<void>((resolve) => { enteredPreparation = resolve; });
+    let releasePreparation!: () => void;
+    const preparationGate = new Promise<void>((resolve) => { releasePreparation = resolve; });
+    let openCalls = 0;
+    const fs: WorkspaceFileSystem = {
+      mkdir: (path, options) => options
+        ? nodeFs.mkdir(path, options)
+        : nodeFs.mkdir(path),
+      async lstat(path, options) {
+        if (deferWorkspaceIdentity && path === issued) {
+          deferWorkspaceIdentity = false;
+          enteredPreparation();
+          await preparationGate;
+        }
+        return nodeFs.lstat(path, options);
+      },
+      realpath: (path) => nodeFs.realpath(path),
+      rename: (oldPath, newPath) => nodeFs.rename(oldPath, newPath),
+      rm: (path, options) => nodeFs.rm(path, options),
+    };
+    const commitFs = {
+      ...nodeSyncFs,
+      openSync(path: nodeSyncFs.PathLike, flags: number, mode?: number) {
+        openCalls += 1;
+        return nodeSyncFs.openSync(path, flags, mode);
+      },
+    };
+    const manager = createWorkspaceManager({ root, fs, commitFs });
+    issued = await manager.create('session-one');
+    deferWorkspaceIdentity = true;
+    const controller = new AbortController();
+
+    const write = manager.writeIssuedFile('session-one', 'demo.ts', 'late', controller.signal);
+    await preparationStarted;
+    controller.abort();
+    releasePreparation();
+
+    await expect(write).rejects.toThrow(/abort/i);
+    expect(openCalls).toBe(0);
+    await expect(readFile(join(issued, 'demo.ts'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('rejects repository metadata writes as defense in depth', async () => {
     const root = await createTemporaryDirectory('harness-workspaces-');
     const manager = createWorkspaceManager({ root });
@@ -166,7 +266,7 @@ describe('createWorkspaceManager', () => {
     expect(await readFile(sentinel, 'utf8')).toBe('safe');
   });
 
-  it('rejects a junction ancestor without writing outside the issued workspace', async () => {
+  it('rejects a nested junction path without writing outside the issued workspace', async () => {
     const root = await createTemporaryDirectory('harness-workspaces-');
     const outside = await createTemporaryDirectory('harness-outside-');
     const manager = createWorkspaceManager({ root });
@@ -176,7 +276,7 @@ describe('createWorkspaceManager', () => {
     await symlink(outside, join(issued, 'nested'), process.platform === 'win32' ? 'junction' : 'dir');
 
     await expect(manager.writeIssuedFile('session-one', 'nested/demo.ts', 'unsafe'))
-      .rejects.toThrow(/symbolic|link|ancestor|identity|changed/i);
+      .rejects.toThrow(/direct child|nested|symbolic|link/i);
 
     expect(await readFile(sentinel, 'utf8')).toBe('safe');
     await expect(realpath(join(outside, 'demo.ts'))).rejects.toMatchObject({ code: 'ENOENT' });

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import * as nodeSyncFs from 'node:fs';
 import * as nodeFs from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 export interface WorkspaceStats {
   readonly dev: bigint;
@@ -15,16 +16,26 @@ export interface WorkspaceFileSystem {
   realpath(path: string): Promise<string>;
   rename(oldPath: string, newPath: string): Promise<void>;
   rm(path: string, options: { recursive: true; force: true }): Promise<void>;
-  writeFile?(
-    path: string,
-    data: string,
-    options: { encoding: 'utf8'; flag: 'wx'; mode: number },
-  ): Promise<void>;
+}
+
+export interface WorkspaceCommitStats extends WorkspaceStats {
+  isFile(): boolean;
+}
+
+export interface WorkspaceCommitFileSystem {
+  lstatSync(path: string, options: { bigint: true }): WorkspaceCommitStats;
+  openSync(path: string, flags: number, mode?: number): number;
+  fstatSync(fd: number, options: { bigint: true }): WorkspaceCommitStats;
+  ftruncateSync(fd: number, length?: number): void;
+  writeSync(fd: number, buffer: Uint8Array, offset: number, length: number): number;
+  fsyncSync(fd: number): void;
+  closeSync(fd: number): void;
 }
 
 export interface WorkspaceManagerOptions {
   readonly root: string;
   readonly fs?: WorkspaceFileSystem;
+  readonly commitFs?: WorkspaceCommitFileSystem;
   readonly now?: () => Date;
 }
 
@@ -32,7 +43,12 @@ export interface WorkspaceManager {
   create(sessionId: string): Promise<string>;
   getIssuedPath(sessionId: string): string | null;
   assertIssued(sessionId: string, path: string): string;
-  writeIssuedFile(sessionId: string, filePath: string, content: string): Promise<void>;
+  writeIssuedFile(
+    sessionId: string,
+    filePath: string,
+    content: string,
+    signal?: AbortSignal,
+  ): Promise<void>;
   remove(sessionId: string): Promise<void>;
 }
 
@@ -85,10 +101,23 @@ type OwnedWorkspace = IssuedWorkspace | QuarantinedWorkspace;
 
 const identityOf = (stats: WorkspaceStats): string => `${stats.dev}:${stats.ino}`;
 
+const defaultCommitFileSystem: WorkspaceCommitFileSystem = {
+  lstatSync: (path) => nodeSyncFs.lstatSync(path, { bigint: true }),
+  openSync: (path, flags, mode) => nodeSyncFs.openSync(path, flags, mode),
+  fstatSync: (fd) => nodeSyncFs.fstatSync(fd, { bigint: true }),
+  ftruncateSync: (fd, length) => nodeSyncFs.ftruncateSync(fd, length),
+  writeSync: (fd, buffer, offset, length) => (
+    nodeSyncFs.writeSync(fd, buffer, offset, length)
+  ),
+  fsyncSync: (fd) => nodeSyncFs.fsyncSync(fd),
+  closeSync: (fd) => nodeSyncFs.closeSync(fd),
+};
+
 export const createWorkspaceManager = (
   options: WorkspaceManagerOptions,
 ): WorkspaceManager => {
   const fs = options.fs ?? nodeFs;
+  const commitFs = options.commitFs ?? defaultCommitFileSystem;
   const configuredRoot = resolve(options.root);
   const issuedWorkspaces = new Map<string, OwnedWorkspace>();
   let canonicalRoot: Promise<CanonicalRoot> | undefined;
@@ -111,7 +140,7 @@ export const createWorkspaceManager = (
   };
 
   const getCanonicalRoot = (): Promise<CanonicalRoot> => {
-    canonicalRoot ??= fs.mkdir(configuredRoot, { recursive: true })
+    canonicalRoot ??= fs.mkdir(configuredRoot, { recursive: true, mode: 0o700 })
       .then(() => fs.realpath(configuredRoot))
       .then(async (path) => {
         const canonicalPath = resolve(path);
@@ -213,43 +242,84 @@ export const createWorkspaceManager = (
     return workspace;
   };
 
-  const ensureStableAncestors = async (
-    workspace: IssuedWorkspace,
-    targetParent: string,
-  ): Promise<Array<{ path: string; identity: string }>> => {
-    const relativeParent = relative(workspace.path, targetParent);
-    if (relativeParent.startsWith('..') || isAbsolute(relativeParent)) {
-      throw new Error('File target is outside the issued workspace');
+  const assertSynchronousDirectoryIdentity = (
+    path: string,
+    expectedIdentity: string,
+  ): void => {
+    const stats = commitFs.lstatSync(path, { bigint: true });
+    if (
+      !stats.isDirectory()
+      || stats.isSymbolicLink()
+      || identityOf(stats) !== expectedIdentity
+    ) {
+      throw new Error('Workspace identity changed');
     }
-    const ancestors: Array<{ path: string; identity: string }> = [];
-    let current = workspace.path;
-    for (const segment of relativeParent.split(sep).filter(Boolean)) {
-      current = resolve(join(current, segment));
-      try {
-        const identity = await readDirectoryIdentity(current);
-        ancestors.push({ path: current, identity });
-      } catch (error) {
-        if (errorCode(error) !== 'ENOENT') throw error;
-        try {
-          await fs.mkdir(current, { mode: 0o700 });
-        } catch (mkdirError) {
-          if (errorCode(mkdirError) !== 'EEXIST') throw mkdirError;
-        }
-        const identity = await readDirectoryIdentity(current);
-        ancestors.push({ path: current, identity });
-      }
-      await assertIdentity(workspace.path, workspace.identity);
-    }
-    return ancestors;
   };
 
-  const assertTargetIsReplaceable = async (target: string): Promise<void> => {
+  const assertWriteNotAborted = (signal?: AbortSignal): void => {
+    if (signal?.aborted) throw new Error('Workspace write aborted');
+  };
+
+  const readSynchronousTarget = (target: string): WorkspaceCommitStats | null => {
     try {
-      const stats = await fs.lstat(target, { bigint: true });
+      const stats = commitFs.lstatSync(target, { bigint: true });
       if (stats.isSymbolicLink()) throw new Error('File target is a symbolic link');
-      if (stats.isDirectory()) throw new Error('File target is a directory');
+      if (!stats.isFile()) throw new Error('File target is not a regular file');
+      return stats;
     } catch (error) {
-      if (errorCode(error) !== 'ENOENT') throw error;
+      if (errorCode(error) === 'ENOENT') return null;
+      throw error;
+    }
+  };
+
+  const commitDirectChild = (
+    root: CanonicalRoot,
+    workspace: IssuedWorkspace,
+    target: string,
+    content: string,
+    signal?: AbortSignal,
+  ): void => {
+    assertWriteNotAborted(signal);
+    assertSynchronousDirectoryIdentity(root.path, root.identity);
+    assertSynchronousDirectoryIdentity(workspace.path, workspace.identity);
+    const targetBeforeOpen = readSynchronousTarget(target);
+    const noFollow = nodeSyncFs.constants.O_NOFOLLOW ?? 0;
+    const flags = nodeSyncFs.constants.O_WRONLY
+      | noFollow
+      | (targetBeforeOpen
+        ? 0
+        : nodeSyncFs.constants.O_CREAT | nodeSyncFs.constants.O_EXCL);
+    let fd: number | undefined;
+    try {
+      // There is deliberately no await from the final identity checks through
+      // close. On Windows O_NOFOLLOW is unavailable, so lstat/open/fstat only
+      // guarantees the remote-public threat model; it does not claim to defeat
+      // a malicious same-account local process racing this synchronous section.
+      fd = commitFs.openSync(target, flags, 0o600);
+      const descriptor = commitFs.fstatSync(fd, { bigint: true });
+      if (!descriptor.isFile()) throw new Error('Write descriptor is not a regular file');
+      const targetAfterOpen = commitFs.lstatSync(target, { bigint: true });
+      if (
+        targetAfterOpen.isSymbolicLink()
+        || !targetAfterOpen.isFile()
+        || identityOf(targetAfterOpen) !== identityOf(descriptor)
+        || (targetBeforeOpen && identityOf(targetBeforeOpen) !== identityOf(descriptor))
+      ) {
+        throw new Error('File target identity changed');
+      }
+      assertSynchronousDirectoryIdentity(root.path, root.identity);
+      assertSynchronousDirectoryIdentity(workspace.path, workspace.identity);
+      if (targetBeforeOpen) commitFs.ftruncateSync(fd, 0);
+      const bytes = Buffer.from(content, 'utf8');
+      let offset = 0;
+      while (offset < bytes.length) {
+        const written = commitFs.writeSync(fd, bytes, offset, bytes.length - offset);
+        if (written <= 0) throw new Error('Workspace file write made no progress');
+        offset += written;
+      }
+      commitFs.fsyncSync(fd);
+    } finally {
+      if (fd !== undefined) commitFs.closeSync(fd);
     }
   };
 
@@ -279,7 +349,7 @@ export const createWorkspaceManager = (
       await assertIdentity(root.path, root.identity);
       const target = resolve(join(root.path, sessionId));
       assertDirectChild(root.path, target);
-      await fs.mkdir(target);
+      await fs.mkdir(target, { mode: 0o700 });
 
       let created: IssuedWorkspace | undefined;
       try {
@@ -325,7 +395,7 @@ export const createWorkspaceManager = (
       }
     },
 
-    async writeIssuedFile(sessionId, filePath, content) {
+    async writeIssuedFile(sessionId, filePath, content, signal) {
       assertValidSessionId(sessionId);
       if (typeof filePath !== 'string' || filePath.length === 0 || isAbsolute(filePath)) {
         throw new Error('Invalid workspace file path');
@@ -333,50 +403,15 @@ export const createWorkspaceManager = (
       if (filePath.split(/[\\/]/).some((segment) => segment.toLowerCase() === '.git')) {
         throw new Error('Repository metadata is protected');
       }
+      if (basename(filePath) !== filePath || /[\\/]/.test(filePath) || filePath === '.') {
+        throw new Error('Workspace file must be a direct child file name');
+      }
+      assertWriteNotAborted(signal);
       const root = await getCanonicalRoot();
       const workspace = await assertIssuedWorkspace(sessionId, root);
       const target = resolve(join(workspace.path, filePath));
-      if (target === workspace.path || !target.startsWith(`${workspace.path}${sep}`)) {
-        throw new Error('File target is outside the issued workspace');
-      }
-      const targetParent = dirname(target);
-      const ancestors = await ensureStableAncestors(workspace, targetParent);
-      await assertTargetIsReplaceable(target);
-      const temporary = resolve(join(
-        targetParent,
-        `.harness-write-${randomUUID()}.tmp`,
-      ));
-      if (dirname(temporary) !== targetParent) {
-        throw new Error('Invalid temporary write target');
-      }
-      let renamed = false;
-      try {
-        const writeFile = fs.writeFile ?? nodeFs.writeFile;
-        await writeFile(temporary, content, {
-          encoding: 'utf8',
-          flag: 'wx',
-          mode: 0o600,
-        });
-        const temporaryStats = await fs.lstat(temporary, { bigint: true });
-        if (temporaryStats.isDirectory() || temporaryStats.isSymbolicLink()) {
-          throw new Error('Temporary write target changed');
-        }
-        await assertIdentity(root.path, root.identity);
-        await assertIdentity(workspace.path, workspace.identity);
-        for (const ancestor of ancestors) {
-          await assertIdentity(ancestor.path, ancestor.identity);
-        }
-        await assertTargetIsReplaceable(target);
-        await fs.rename(temporary, target);
-        renamed = true;
-        await assertIdentity(root.path, root.identity);
-        await assertIdentity(workspace.path, workspace.identity);
-        await assertTargetIsReplaceable(target);
-      } finally {
-        if (!renamed) {
-          await fs.rm(temporary, { recursive: true, force: true });
-        }
-      }
+      assertDirectChild(workspace.path, target);
+      commitDirectChild(root, workspace, target, content, signal);
     },
 
     async remove(sessionId) {

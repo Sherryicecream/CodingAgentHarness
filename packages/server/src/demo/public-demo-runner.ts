@@ -125,7 +125,7 @@ export const createPublicDemoRunner = (
     const contextBuilder = createContextBuilder(
       'Run only the deterministic in-process public demonstration using write_file.',
     );
-    const tools = createPublicDemoToolRegistry(options.workspaceManager, session.id);
+    const tools = createPublicDemoToolRegistry(options.workspaceManager, session.id, signal);
     const governance = createGovernanceService();
     const feedback = createInjectedFeedback();
     const messages: Message[] = [];

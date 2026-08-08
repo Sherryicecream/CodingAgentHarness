@@ -132,15 +132,18 @@ const defaultIntervalScheduler: IntervalScheduler = {
 const DEFAULT_SESSION_SWEEP_INTERVAL_MS = 60_000;
 
 export const createApp = (options: AppOptions = {}): HarnessApp => {
-  const app = express() as HarnessApp;
   const policy = resolveRuntimePolicy(options.mode ?? process.env.HARNESS_MODE);
+  if (policy.mode === 'local' && (!options.credentialStore || !options.sessionStore)) {
+    throw new Error('Local mode requires credentialStore and sessionStore dependencies');
+  }
+  const app = express() as HarnessApp;
   const trustProxy = resolveTrustProxy(options.trustProxy, process.env.HARNESS_TRUST_PROXY);
   const workspaceRoot = options.workspaceRoot
     ?? process.env.HARNESS_WORKSPACE_ROOT
     ?? join(process.cwd(), '.harness-workspaces');
   const credentialStore = options.credentialStore ?? disabledCredentialStore();
   const sessionStore = policy.mode === 'local'
-    ? options.sessionStore
+    ? options.sessionStore!
     : undefined;
   const workspaceManager = options.workspaceManager ?? createWorkspaceManager({ root: workspaceRoot });
   const sessionRegistry = options.sessionRegistry ?? createSessionRegistry({

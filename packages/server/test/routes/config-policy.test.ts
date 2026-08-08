@@ -1,5 +1,6 @@
 import request from 'supertest';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { SessionStore } from '@harness/core';
 import { createApp } from '../../src/app.js';
 import type { CredentialStore } from '../../src/credential-store.js';
 
@@ -11,7 +12,39 @@ const throwingStore = (): CredentialStore => ({
   listServices: () => { throw new Error('credential store must not be called'); },
 });
 
+const emptySessionStore = (): SessionStore => ({
+  save: async () => undefined,
+  load: async () => null,
+  list: async () => [],
+  delete: async () => undefined,
+});
+
 describe('configuration policy boundary', () => {
+  it.each([
+    {
+      label: 'credential store',
+      dependencies: { sessionStore: emptySessionStore() },
+    },
+    {
+      label: 'session store',
+      dependencies: { credentialStore: throwingStore() },
+    },
+  ])('fails fast before scheduling work when local mode omits the $label', ({ dependencies }) => {
+    const setInterval = vi.fn((): never => {
+      throw new Error('INTERVAL_MUST_NOT_START');
+    });
+
+    expect(() => createApp({
+      mode: 'local',
+      ...dependencies,
+      intervalScheduler: {
+        setInterval,
+        clearInterval: () => undefined,
+      },
+    })).toThrow(/local.*credential.*session|dependencies.*required/i);
+    expect(setInterval).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['get', '/api/config/status'],
     ['post', '/api/config/key'],
@@ -39,7 +72,11 @@ describe('configuration policy boundary', () => {
       deleteKey: (service) => { values.delete(service); },
       listServices: () => [...values.keys()],
     };
-    const app = createApp({ mode: 'local', credentialStore: store });
+    const app = createApp({
+      mode: 'local',
+      credentialStore: store,
+      sessionStore: emptySessionStore(),
+    });
 
     const saved = await request(app).post('/api/config/key').send({ key: 'sk-local-value' });
     const status = await request(app).get('/api/config/status');

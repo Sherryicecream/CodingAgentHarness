@@ -1,9 +1,11 @@
 import { existsSync } from 'node:fs';
+import { Server } from 'node:http';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import request from 'supertest';
+import { build, type Metafile } from 'esbuild';
 import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SSEEvent, SSEManager } from '../../src/sse/sse-manager.js';
@@ -41,6 +43,28 @@ interface ModuleGraph {
   readonly eagerExternalImports: ReadonlySet<string>;
   readonly lazyImports: ReadonlySet<string>;
 }
+
+const collectOutputClosure = (
+  metafile: Metafile,
+  roots: readonly string[],
+): ReadonlySet<string> => {
+  const outputs = new Set<string>();
+  const visit = (output: string): void => {
+    if (outputs.has(output) || !metafile.outputs[output]) return;
+    outputs.add(output);
+    for (const dependency of metafile.outputs[output].imports) {
+      if (dependency.kind !== 'dynamic-import') visit(dependency.path);
+    }
+  };
+  roots.forEach(visit);
+  return outputs;
+};
+
+const collectInputs = (metafile: Metafile, outputs: ReadonlySet<string>): string[] => (
+  [...new Set([...outputs].flatMap((output) => (
+    Object.keys(metafile.outputs[output]!.inputs)
+  )))]
+);
 
 const within = async <T>(operation: PromiseLike<T>, label: string): Promise<T> => {
   let timer: NodeJS.Timeout | undefined;
@@ -129,6 +153,7 @@ const buildModuleGraph = async (entry: string): Promise<ModuleGraph> => {
 };
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   vi.resetModules();
   vi.clearAllMocks();
   await Promise.all(closeApp.splice(0).map((close) => close()));
@@ -138,6 +163,59 @@ afterEach(async () => {
 });
 
 describe('public demo capability boundary', () => {
+  it('keeps unsafe capabilities in dynamic chunks in the real in-memory server build', async () => {
+    const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../src');
+    const result = await build({
+      entryPoints: [join(sourceRoot, 'server.ts')],
+      bundle: true,
+      format: 'esm',
+      platform: 'node',
+      target: 'node22',
+      splitting: true,
+      write: false,
+      metafile: true,
+      outdir: 'memory-build',
+      tsconfig: resolve(sourceRoot, '../tsconfig.json'),
+      logLevel: 'silent',
+    });
+    const entry = Object.entries(result.metafile.outputs).find(([, output]) => (
+      output.entryPoint?.replace(/\\/g, '/').endsWith('/src/server.ts')
+      || output.entryPoint?.replace(/\\/g, '/') === 'src/server.ts'
+    ))?.[0];
+    expect(entry).toBeDefined();
+    const eagerOutputs = collectOutputClosure(result.metafile, [entry!]);
+    const eagerInputs = collectInputs(result.metafile, eagerOutputs);
+    const eagerImports = [...eagerOutputs].flatMap((output) => (
+      result.metafile.outputs[output]!.imports
+        .filter((dependency) => dependency.kind !== 'dynamic-import')
+        .map((dependency) => dependency.path)
+    ));
+    const dynamicRoots = [...eagerOutputs].flatMap((output) => (
+      result.metafile.outputs[output]!.imports
+        .filter((dependency) => dependency.kind === 'dynamic-import')
+        .map((dependency) => dependency.path)
+    ));
+    const lazyInputs = collectInputs(
+      result.metafile,
+      collectOutputClosure(result.metafile, dynamicRoots),
+    );
+    const prohibitedEagerInputs = eagerInputs.filter((input) => (
+      /[\\/](?:credential-store|privileged-agent-run|tool-registry-factory|deepseek|test-runner|execute-shell|run-tests|git-diff|git-commit)\.ts$/.test(input)
+    ));
+    const prohibitedEagerImports = eagerImports.filter((specifier) => (
+      /^(?:node:)?child_process$/.test(specifier)
+    ));
+
+    expect({ prohibitedEagerInputs, prohibitedEagerImports }).toEqual({
+      prohibitedEagerInputs: [],
+      prohibitedEagerImports: [],
+    });
+    expect(lazyInputs.some((input) => /[\\/]credential-store\.ts$/.test(input))).toBe(true);
+    expect(lazyInputs.some((input) => /[\\/]privileged-agent-run\.ts$/.test(input))).toBe(true);
+    expect(lazyInputs.some((input) => /[\\/]deepseek\.ts$/.test(input))).toBe(true);
+    expect(lazyInputs.some((input) => /[\\/]test-runner\.ts$/.test(input))).toBe(true);
+  });
+
   it('keeps provider, credentials, and process capabilities out of the real app eager graph', async () => {
     const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../src');
     const appGraph = await buildModuleGraph(join(sourceRoot, 'app.ts'));
@@ -227,5 +305,27 @@ describe('public demo capability boundary', () => {
 
     expect(started.status).toBe(202);
     expect(events.some((event) => event.type === 'complete')).toBe(true);
+  });
+
+  it('imports the real server module without listening or loading privileged modules', async () => {
+    vi.stubEnv('HARNESS_MODE', 'public');
+    vi.doMock('@harness/core', () => { throw new Error('CORE_BARREL_LOADED'); });
+    vi.doMock('node:child_process', () => { throw new Error('CHILD_PROCESS_MODULE_LOADED'); });
+    vi.doMock('../../src/credential-store.js', () => {
+      throw new Error('CREDENTIAL_MODULE_LOADED');
+    });
+    vi.doMock('../../src/agent/privileged-agent-run.js', () => {
+      throw new Error('PRIVILEGED_AGENT_MODULE_LOADED');
+    });
+    const listen = vi.spyOn(Server.prototype, 'listen')
+      .mockReturnValue({} as Server);
+
+    const serverModule = await import('../../src/server.js');
+    expect(serverModule.startServer).toEqual(expect.any(Function));
+    expect(listen).not.toHaveBeenCalled();
+
+    const app = await serverModule.startServer();
+    closeApp.push(app.close);
+    expect(listen).toHaveBeenCalledTimes(1);
   });
 });

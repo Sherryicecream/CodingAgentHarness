@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPublicDemoRunner } from '../../src/demo/public-demo-runner.js';
 import type { PublicSession } from '../../src/session/session-registry.js';
 import { createWorkspaceManager } from '../../src/session/workspace-manager.js';
+import type { WorkspaceManager } from '../../src/session/workspace-manager.js';
 import type { SSEEvent } from '../../src/sse/sse-manager.js';
 
 const temporaryRoots: string[] = [];
@@ -33,6 +34,44 @@ const createDemoSession = async (id: string): Promise<{
       status: 'running',
       createdAt: new Date('2026-08-08T00:00:00.000Z'),
       expiresAt: new Date('2026-08-08T01:00:00.000Z'),
+    },
+  };
+};
+
+const deferWriteCall = (
+  manager: WorkspaceManager,
+  deferredCall: number,
+): {
+  manager: WorkspaceManager;
+  started: Promise<void>;
+  release(): void;
+  committedWrites(): number;
+} => {
+  let callCount = 0;
+  let committedWrites = 0;
+  let announceStarted!: () => void;
+  const started = new Promise<void>((resolve) => { announceStarted = resolve; });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  return {
+    started,
+    release,
+    committedWrites: () => committedWrites,
+    manager: {
+      create: (sessionId) => manager.create(sessionId),
+      getIssuedPath: (sessionId) => manager.getIssuedPath(sessionId),
+      assertIssued: (sessionId, path) => manager.assertIssued(sessionId, path),
+      async writeIssuedFile(sessionId, filePath, content, signal) {
+        callCount += 1;
+        if (callCount === deferredCall) {
+          announceStarted();
+          await gate;
+        }
+        if (signal?.aborted) throw new Error('DEFERRED_WRITE_ABORTED');
+        await manager.writeIssuedFile(sessionId, filePath, content, signal);
+        committedWrites += 1;
+      },
+      remove: (sessionId) => manager.remove(sessionId),
     },
   };
 };
@@ -173,6 +212,52 @@ describe('public demo runner', () => {
     expect(events).toEqual([]);
     await expect(readFile(join(session.workspace, 'demo.ts'), 'utf8'))
       .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('aborts an in-flight initial write before commit with no file or tool event', async () => {
+    const { session, workspaceManager } = await createDemoSession('deferred-initial-demo');
+    const deferred = deferWriteCall(workspaceManager, 1);
+    const controller = new AbortController();
+    const events: Array<Pick<SSEEvent, 'type' | 'data'>> = [];
+    const runner = createPublicDemoRunner({
+      emit: (type, data) => { events.push({ type, data }); },
+      workspaceManager: deferred.manager,
+    });
+
+    const completion = runner.run(session, controller.signal);
+    await deferred.started;
+    controller.abort();
+    deferred.release();
+
+    await expect(completion).rejects.toThrow(/abort/i);
+    expect(deferred.committedWrites()).toBe(0);
+    expect(events).toEqual([]);
+    await expect(readFile(join(session.workspace, 'demo.ts'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('aborts an in-flight corrected write before commit and keeps the initial file', async () => {
+    const { session, workspaceManager } = await createDemoSession('deferred-correction-demo');
+    const deferred = deferWriteCall(workspaceManager, 2);
+    const controller = new AbortController();
+    const events: Array<Pick<SSEEvent, 'type' | 'data'>> = [];
+    const runner = createPublicDemoRunner({
+      emit: (type, data) => { events.push({ type, data }); },
+      workspaceManager: deferred.manager,
+    });
+
+    const completion = runner.run(session, controller.signal);
+    await deferred.started;
+    controller.abort();
+    deferred.release();
+
+    await expect(completion).rejects.toThrow(/abort/i);
+    expect(deferred.committedWrites()).toBe(1);
+    expect(events.some((event) => (
+      (event.data as { stage?: string }).stage === 'corrected_write'
+    ))).toBe(false);
+    await expect(readFile(join(session.workspace, 'demo.ts'), 'utf8'))
+      .resolves.toBe("export const greeting = 'hello';\n");
   });
 
   it('keeps concurrent runs deterministic and isolated on one runner instance', async () => {

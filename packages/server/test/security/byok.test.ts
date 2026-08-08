@@ -209,6 +209,7 @@ describe('BYOK request security', () => {
     };
     const app = await createTestApp({
       mode: 'local',
+      credentialStore: emptyCredentialStore,
       sessionStore,
       byokAdapterFactory: () => ({
         adapter: echoingAdapter,
@@ -235,6 +236,7 @@ describe('BYOK request security', () => {
     const warnings: unknown[] = [];
     const app = await createTestApp({
       mode: 'local',
+      credentialStore: emptyCredentialStore,
       sessionStore: {
         save: async () => { throw new Error('history unavailable'); },
         list: async () => [],
@@ -547,6 +549,7 @@ describe('BYOK request security', () => {
     const ids = ['save-pending', 'replacement-after-save'];
     const app = await createTestApp({
       mode: 'local',
+      credentialStore: emptyCredentialStore,
       now: () => new Date(currentTime),
       idGenerator: () => ids.shift()!,
       maxConcurrent: 1,

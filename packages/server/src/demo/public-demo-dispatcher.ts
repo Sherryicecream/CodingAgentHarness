@@ -5,6 +5,7 @@ import type { WorkspaceManager } from '../session/workspace-manager.js';
 export const createPublicDemoToolRegistry = (
   workspaceManager: WorkspaceManager,
   sessionId: string,
+  signal?: AbortSignal,
 ): ToolRegistry => {
   const registry = createToolRegistry();
   const writeFile: Tool = {
@@ -30,6 +31,7 @@ export const createPublicDemoToolRegistry = (
           sessionId,
           parameters.path,
           parameters.content,
+          signal,
         );
         return { success: true, output: `File written: ${parameters.path}` };
       } catch {

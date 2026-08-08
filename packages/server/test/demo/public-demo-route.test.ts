@@ -6,6 +6,7 @@ import request from 'supertest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp, type HarnessApp } from '../../src/app.js';
 import type { CredentialStore } from '../../src/credential-store.js';
+import { createWorkspaceManager, type WorkspaceManager } from '../../src/session/workspace-manager.js';
 import type { SSEEvent, SSEManager } from '../../src/sse/sse-manager.js';
 
 const temporaryRoots: string[] = [];
@@ -23,6 +24,53 @@ const waitFor = async (predicate: () => boolean): Promise<void> => {
     await new Promise<void>((resolve) => setTimeout(resolve, 10));
   }
   throw new Error('Timed out waiting for demo completion');
+};
+
+const deferWorkspaceWrite = (
+  manager: WorkspaceManager,
+  deferredCall: number,
+): {
+  manager: WorkspaceManager;
+  started: Promise<void>;
+  aborted: Promise<void>;
+  release(): void;
+  committedWrites(): number;
+} => {
+  let calls = 0;
+  let committedWrites = 0;
+  let announceStarted!: () => void;
+  const started = new Promise<void>((resolve) => { announceStarted = resolve; });
+  let announceAborted!: () => void;
+  const aborted = new Promise<void>((resolve) => { announceAborted = resolve; });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  return {
+    started,
+    aborted,
+    release,
+    committedWrites: () => committedWrites,
+    manager: {
+      create: (sessionId) => manager.create(sessionId),
+      getIssuedPath: (sessionId) => manager.getIssuedPath(sessionId),
+      assertIssued: (sessionId, path) => manager.assertIssued(sessionId, path),
+      async writeIssuedFile(sessionId, filePath, content, signal) {
+        calls += 1;
+        if (calls === deferredCall) {
+          announceStarted();
+          if (signal?.aborted) {
+            announceAborted();
+          } else {
+            signal?.addEventListener('abort', announceAborted, { once: true });
+          }
+          await gate;
+        }
+        if (signal?.aborted) throw new Error('DEFERRED_WRITE_ABORTED');
+        await manager.writeIssuedFile(sessionId, filePath, content, signal);
+        committedWrites += 1;
+      },
+      remove: (sessionId) => manager.remove(sessionId),
+    },
+  };
 };
 
 afterEach(async () => {
@@ -167,4 +215,65 @@ describe('public demo route', () => {
     await expect(readFile(join(workspaceRoot, 'expiring-demo', 'demo.ts'), 'utf8'))
       .rejects.toMatchObject({ code: 'ENOENT' });
   });
+
+  it.each([
+    { label: 'initial', deferredCall: 1, committedBeforeExpiry: 0 },
+    { label: 'corrected', deferredCall: 2, committedBeforeExpiry: 1 },
+  ])(
+    'expires during an in-flight $label write without committing or emitting late stages',
+    async ({ deferredCall, committedBeforeExpiry }) => {
+      const workspaceRoot = await mkdtemp(join(tmpdir(), 'harness-inflight-expiry-'));
+      temporaryRoots.push(workspaceRoot);
+      const actualManager = createWorkspaceManager({ root: workspaceRoot });
+      const deferred = deferWorkspaceWrite(actualManager, deferredCall);
+      let currentTime = new Date('2026-08-08T00:00:00.000Z');
+      const events: SSEEvent[] = [];
+      const sseManager: SSEManager = {
+        createConnection: () => undefined,
+        disconnect: () => undefined,
+        setSecrets: () => undefined,
+        clearSecrets: () => undefined,
+        push: (_sessionId, event) => { events.push(event); },
+        close: () => undefined,
+      };
+      const app = createApp({
+        mode: 'public',
+        workspaceRoot,
+        workspaceManager: deferred.manager,
+        now: () => new Date(currentTime),
+        idGenerator: () => `inflight-${deferredCall}`,
+        sseManager,
+        logger: {
+          error: () => undefined,
+          info: () => undefined,
+          warn: () => undefined,
+        },
+      });
+      apps.push(app);
+      await request(app).post('/api/agent/sessions').send({});
+      const response = await request(app).post('/api/agent/run').send({
+        sessionId: `inflight-${deferredCall}`,
+        task: 'show the safety mechanisms',
+        mode: 'demo',
+      });
+      await deferred.started;
+
+      currentTime = new Date('2026-08-08T01:00:00.000Z');
+      const sweep = app.sweepSessions();
+      await deferred.aborted;
+      deferred.release();
+      await sweep;
+      const eventCountAtCleanup = events.length;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(response.status).toBe(202);
+      expect(deferred.committedWrites()).toBe(committedBeforeExpiry);
+      expect(events.some((event) => (
+        (event.data as { stage?: string }).stage === 'corrected_write'
+      ))).toBe(false);
+      expect(events).toHaveLength(eventCountAtCleanup);
+      await expect(readFile(join(workspaceRoot, `inflight-${deferredCall}`, 'demo.ts'), 'utf8'))
+        .rejects.toMatchObject({ code: 'ENOENT' });
+    },
+  );
 });
