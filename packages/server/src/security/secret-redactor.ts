@@ -1,9 +1,12 @@
+import type { Session } from '@harness/core';
+
 const REDACTED = '[REDACTED]';
 const CIRCULAR = '[Circular]';
 const UNSERIALIZABLE = '[UNSERIALIZABLE]';
 
 const normalizeSecrets = (secrets: readonly string[]): string[] => (
   [...new Set(secrets.filter((secret) => secret.length > 0))]
+    .sort((left, right) => right.length - left.length)
 );
 
 const redactString = (value: string, secrets: readonly string[]): string => {
@@ -51,12 +54,27 @@ export const redactSecrets = (
 
     ancestors.add(current);
     try {
+      if (
+        current instanceof String
+        || current instanceof ArrayBuffer
+        || ArrayBuffer.isView(current)
+        || (typeof SharedArrayBuffer !== 'undefined' && current instanceof SharedArrayBuffer)
+      ) {
+        return REDACTED;
+      }
+      if (current instanceof Map || current instanceof Set) {
+        return UNSERIALIZABLE;
+      }
       if (current instanceof Date) {
-        const timestamp = current.getTime();
-        return Number.isNaN(timestamp) ? UNSERIALIZABLE : current.toISOString();
+        const timestamp = Date.prototype.getTime.call(current);
+        return Number.isNaN(timestamp)
+          ? UNSERIALIZABLE
+          : Date.prototype.toISOString.call(current);
       }
 
-      const output: Record<string, unknown> | unknown[] = Array.isArray(current) ? [] : {};
+      const output: Record<string, unknown> | unknown[] = Array.isArray(current)
+        ? []
+        : Object.create(null) as Record<string, unknown>;
       let keys: (string | symbol)[];
       try {
         keys = Reflect.ownKeys(current);
@@ -66,8 +84,14 @@ export const redactSecrets = (
 
       if (current instanceof Error) {
         const errorOutput = output as Record<string, unknown>;
-        errorOutput.name = redactString(current.name, normalizedSecrets);
-        errorOutput.message = redactString(current.message, normalizedSecrets);
+        const nameDescriptor = Object.getOwnPropertyDescriptor(current, 'name');
+        const messageDescriptor = Object.getOwnPropertyDescriptor(current, 'message');
+        errorOutput.name = typeof nameDescriptor?.value === 'string'
+          ? redactString(nameDescriptor.value, normalizedSecrets)
+          : 'Error';
+        errorOutput.message = typeof messageDescriptor?.value === 'string'
+          ? redactString(messageDescriptor.value, normalizedSecrets)
+          : UNSERIALIZABLE;
       }
 
       for (const key of keys) {
@@ -78,19 +102,24 @@ export const redactSecrets = (
         try {
           descriptor = Object.getOwnPropertyDescriptor(current, key);
         } catch {
-          (output as Record<string, unknown>)[redactString(key, normalizedSecrets)] = UNSERIALIZABLE;
+          Object.defineProperty(output, redactString(key, normalizedSecrets), {
+            value: UNSERIALIZABLE,
+            enumerable: true,
+            configurable: true,
+            writable: true,
+          });
           continue;
         }
         if (!descriptor?.enumerable) {
           continue;
         }
-        let child: unknown;
-        try {
-          child = Reflect.get(current, key);
-        } catch {
-          child = UNSERIALIZABLE;
-        }
-        (output as Record<string, unknown>)[redactString(key, normalizedSecrets)] = visit(child);
+        const child = 'value' in descriptor ? descriptor.value : UNSERIALIZABLE;
+        Object.defineProperty(output, redactString(key, normalizedSecrets), {
+          value: visit(child),
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
       }
       return output;
     } catch {
@@ -101,4 +130,70 @@ export const redactSecrets = (
   };
 
   return visit(value);
+};
+
+export interface SessionWithOptionalUpdatedAt extends Session {
+  readonly updatedAt?: Date;
+}
+
+const redactRecord = (
+  value: Record<string, unknown>,
+  secrets: readonly string[],
+): Record<string, unknown> => {
+  const redacted = redactSecrets(value, secrets);
+  return typeof redacted === 'object' && redacted !== null && !Array.isArray(redacted)
+    ? redacted as Record<string, unknown>
+    : {};
+};
+
+export const sanitizeSessionSecrets = (
+  session: SessionWithOptionalUpdatedAt,
+  secrets: readonly string[],
+): SessionWithOptionalUpdatedAt => {
+  const normalizedSecrets = normalizeSecrets(secrets);
+  return {
+    id: redactString(session.id, normalizedSecrets),
+    createdAt: new Date(session.createdAt.getTime()),
+    ...(session.updatedAt
+      ? { updatedAt: new Date(session.updatedAt.getTime()) }
+      : {}),
+    task: redactString(session.task, normalizedSecrets),
+    messages: session.messages.map((message) => ({
+      role: message.role,
+      content: redactString(message.content, normalizedSecrets),
+      ...(message.toolCallId === undefined
+        ? {}
+        : { toolCallId: redactString(message.toolCallId, normalizedSecrets) }),
+      ...(message.name === undefined
+        ? {}
+        : { name: redactString(message.name, normalizedSecrets) }),
+      ...(message.toolCalls === undefined
+        ? {}
+        : {
+            toolCalls: message.toolCalls.map((toolCall) => ({
+              id: redactString(toolCall.id, normalizedSecrets),
+              name: redactString(toolCall.name, normalizedSecrets),
+              arguments: redactRecord(toolCall.arguments, normalizedSecrets),
+            })),
+          }),
+    })),
+    toolCalls: session.toolCalls.map((toolCall) => ({
+      timestamp: new Date(toolCall.timestamp.getTime()),
+      toolName: redactString(toolCall.toolName, normalizedSecrets),
+      params: redactRecord(toolCall.params, normalizedSecrets),
+      result: {
+        success: toolCall.result.success,
+        output: redactString(toolCall.result.output, normalizedSecrets),
+        ...(toolCall.result.error === undefined
+          ? {}
+          : { error: redactString(toolCall.result.error, normalizedSecrets) }),
+      },
+      guardrailCheck: toolCall.guardrailCheck,
+    })),
+    feedbackRuns: session.feedbackRuns.map((feedbackRun) => ({ ...feedbackRun })),
+    status: session.status,
+    conclusion: session.conclusion === null
+      ? null
+      : redactString(session.conclusion, normalizedSecrets),
+  };
 };

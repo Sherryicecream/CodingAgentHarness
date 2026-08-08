@@ -62,6 +62,7 @@ const isTestCommand = (command: string): boolean => {
 
 export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
   let aborted = false;
+  const abortController = new AbortController();
   let currentState: ExecutionState | null = null;
 
   const buildSession = (
@@ -190,7 +191,7 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
           feedbackState: state.feedbackState,
         });
         deps.onEvent?.('loop_step', { iteration: state.iteration, phase: 'calling_llm' });
-        response = await deps.llm.sendMessage(context);
+        response = await deps.llm.sendMessage(context, abortController.signal);
         if (aborted) {
           return finish(state, 'failed');
         }
@@ -286,6 +287,7 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
 
     abort() {
       aborted = true;
+      abortController.abort();
     },
   };
 }

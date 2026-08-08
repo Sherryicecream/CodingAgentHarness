@@ -50,6 +50,7 @@ export interface AppOptions {
   credentialStore?: CredentialStore;
   agentRun?: AgentRun;
   byokAdapterFactory?: ByokAdapterFactory;
+  abortTimeoutMs?: number;
   maxConcurrent?: number;
   runRateLimit?: RunRateLimitOptions;
   sessionRateLimit?: RunRateLimitOptions;
@@ -178,6 +179,7 @@ export const createApp = (options: AppOptions = {}): HarnessApp => {
     },
     logger,
     sessionStore,
+    abortTimeoutMs: options.abortTimeoutMs,
   });
   let closed = false;
   let sweepInFlight: Promise<void> | null = null;

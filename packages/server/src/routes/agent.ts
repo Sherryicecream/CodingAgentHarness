@@ -20,7 +20,7 @@ import {
 import { createPolicyToolRegistry } from '../agent/tool-registry-factory.js';
 import type { CredentialStore } from '../credential-store.js';
 import { isSecureByokRequest } from '../security/request-security.js';
-import { redactSecrets } from '../security/secret-redactor.js';
+import { sanitizeSessionSecrets } from '../security/secret-redactor.js';
 import type { RuntimeExperience, RuntimePolicy } from '../security/runtime-policy.js';
 import {
   ConcurrentSessionLimitError,
@@ -87,6 +87,7 @@ export interface AgentRouterDependencies {
   readonly sessionRateLimit?: RunRateLimitOptions;
   readonly logger?: Pick<Console, 'warn'>;
   readonly sessionStore?: SessionStore;
+  readonly abortTimeoutMs?: number;
 }
 
 export interface ActiveExpiryResult {
@@ -157,6 +158,27 @@ const safeProviderStatus = (error: unknown): number | undefined => {
   }
 };
 
+const DEFAULT_ABORT_TIMEOUT_MS = 5_000;
+
+const abortWithTimeout = async (
+  abort: () => void | Promise<void>,
+  timeoutMs: number,
+): Promise<'completed' | 'timed_out'> => {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<'timed_out'>((resolve) => {
+    timer = setTimeout(() => resolve('timed_out'), timeoutMs);
+    timer.unref?.();
+  });
+  const operation = Promise.resolve().then(abort).then(() => 'completed' as const);
+  try {
+    return await Promise.race([operation, timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+};
+
 class LLMProviderError extends Error {
   constructor(readonly statusCode?: number) {
     super('LLM_PROVIDER_ERROR');
@@ -170,6 +192,10 @@ export const createAgentRouter = (
   const router = Router() as AgentRouter;
   const now = dependencies.now ?? (() => new Date());
   const logger = dependencies.logger ?? console;
+  const abortTimeoutMs = dependencies.abortTimeoutMs ?? DEFAULT_ABORT_TIMEOUT_MS;
+  if (!Number.isSafeInteger(abortTimeoutMs) || abortTimeoutMs <= 0) {
+    throw new Error('abortTimeoutMs must be a positive integer');
+  }
   type CompletionOutcome =
     | { readonly kind: 'resolved'; readonly result: AgentRunOutput | void }
     | { readonly kind: 'rejected'; readonly providerStatus?: number };
@@ -214,13 +240,12 @@ export const createAgentRouter = (
     }
     active.phase = 'terminal';
     try {
-      let outcome = requestedOutcome;
+      const outcome = requestedOutcome;
       if (outcome === 'completed' && dependencies.sessionStore && result?.session) {
         try {
           await dependencies.sessionStore.save(result.session);
         } catch {
           logger.warn('SESSION_HISTORY_SAVE_FAILED');
-          outcome = 'failed';
         }
       }
       try {
@@ -295,7 +320,15 @@ export const createAgentRouter = (
         if (!active.handle.abort) {
           throw new Error('Active run has no abort handle');
         }
-        await active.handle.abort();
+        const abortOutcome = await abortWithTimeout(
+          () => active.handle.abort!(),
+          abortTimeoutMs,
+        );
+        if (abortOutcome === 'timed_out') {
+          logger.warn('SESSION_ABORT_TIMEOUT');
+          await finalizeRun(active, 'failed');
+          return;
+        }
         if (rejectedByUser) {
           if (active.handle.approve) {
             try {
@@ -642,7 +675,7 @@ export interface DefaultAgentRunOptions {
 }
 
 const createTransientDeepSeekResource: ByokAdapterFactory = (apiKey) => {
-  let adapter: LLMAdapter | undefined = new DeepSeekAdapter({
+  let adapter: DeepSeekAdapter | undefined = new DeepSeekAdapter({
     apiKey,
     baseUrl: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
   });
@@ -656,14 +689,16 @@ const createTransientDeepSeekResource: ByokAdapterFactory = (apiKey) => {
         return activeAdapter.sendMessage(context);
       },
     },
-    release: () => { adapter = undefined; },
+    release: () => {
+      adapter?.dispose();
+      adapter = undefined;
+    },
   };
 };
 
 export const createDefaultAgentRun = (
   options: DefaultAgentRunOptions,
-): AgentRun => (input) => {
-  const { session, task, mode, emit } = input;
+): AgentRun => ({ session, task, mode, emit, apiKey }) => {
   const tools = createPolicyToolRegistry(options.policy, session.workspace);
   const governance = createGovernanceService();
   const feedback = createFeedbackLoop(
@@ -672,9 +707,10 @@ export const createDefaultAgentRun = (
     createFailureClassifier(),
     createFixSuggestionBuilder(),
   );
-  let byokSecret = mode === 'byok' ? input.apiKey ?? '' : '';
+  let byokSecret = mode === 'byok' ? apiKey ?? '' : '';
+  apiKey = undefined;
   let byokResource: ByokAdapterResource | undefined;
-  let llm: LLMAdapter;
+  let llm: LLMAdapter | undefined;
   if (mode === 'byok') {
     if (byokSecret.length === 0) {
       throw new Error('BYOK requires a credential');
@@ -714,10 +750,11 @@ export const createDefaultAgentRun = (
     config: { maxIterations: 10 },
     onEvent: (type, data) => emit(type as SSEEvent['type'], data),
   });
+  llm = undefined;
   const mapResult = (completion: ReturnType<AgentLoop['run']>): Promise<AgentRunOutput> => (
     completion.then((result) => {
       const safeSession = mode === 'byok'
-        ? redactSecrets(result.session, [byokSecret]) as Session
+        ? sanitizeSessionSecrets(result.session, [byokSecret])
         : result.session;
       return {
         status: result.status,
@@ -756,9 +793,8 @@ export const createDefaultAgentRun = (
       return activeCompletion;
     },
     approve: (approved) => loop?.handleApproval(approved),
-    abort: async () => {
+    abort: () => {
       loop?.abort();
-      await activeCompletion.catch(() => undefined);
     },
     release,
   };

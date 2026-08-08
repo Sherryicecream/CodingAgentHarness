@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { redactSecrets } from '../../src/security/secret-redactor.js';
+import type { Session } from '@harness/core';
+import {
+  redactSecrets,
+  sanitizeSessionSecrets,
+} from '../../src/security/secret-redactor.js';
 
 const SENTINEL = 'sk-test-redaction-sentinel';
 
@@ -45,9 +49,13 @@ describe('redactSecrets', () => {
   });
 
   it('does not leak when an input property cannot be read', () => {
+    let getterCalls = 0;
     const input = Object.defineProperty({}, 'payload', {
       enumerable: true,
-      get: () => { throw new Error(`getter exposed ${SENTINEL}`); },
+      get: () => {
+        getterCalls += 1;
+        throw new Error(`getter exposed ${SENTINEL}`);
+      },
     });
 
     const result = redactSecrets(input, [SENTINEL]);
@@ -55,5 +63,95 @@ describe('redactSecrets', () => {
 
     expect(serialized).toBe('{"payload":"[UNSERIALIZABLE]"}');
     expect(serialized).not.toContain(SENTINEL);
+    expect(getterCalls).toBe(0);
+  });
+
+  it('redacts overlapping secrets longest-first without leaving suffixes', () => {
+    const single = redactSecrets('abcdef', ['abc', '', 'abcdef', 'abc']);
+    const repeated = redactSecrets('abcdef abc abcdef', ['abc', '', 'abcdef', 'abc']);
+
+    expect(single).toBe('[REDACTED]');
+    expect(repeated).toBe('[REDACTED] [REDACTED] [REDACTED]');
+    expect(String(repeated)).not.toContain('def');
+  });
+
+  it('replaces binary and boxed string values without exposing reversible contents', () => {
+    const bytes = Buffer.from(SENTINEL, 'utf8');
+    const arrayBuffer = bytes.buffer.slice(
+      bytes.byteOffset,
+      bytes.byteOffset + bytes.byteLength,
+    );
+    const input = [
+      bytes,
+      new Uint8Array(arrayBuffer),
+      new DataView(arrayBuffer),
+      arrayBuffer,
+      new String(SENTINEL),
+    ];
+
+    const result = redactSecrets(input, [SENTINEL]);
+    const serialized = JSON.stringify(result);
+
+    expect(result).toEqual(Array.from({ length: 5 }, () => '[REDACTED]'));
+    expect(serialized).not.toContain(SENTINEL);
+    expect(Object.values(result as object).join('')).not.toContain(SENTINEL);
+    expect(String(result)).not.toContain(SENTINEL);
+  });
+
+  it('does not invoke toJSON/accessors or expose Map, Set, Symbol, and cycle contents', () => {
+    let toJsonCalls = 0;
+    let getterCalls = 0;
+    const input: Record<string, unknown> = {
+      map: new Map([[SENTINEL, SENTINEL]]),
+      set: new Set([SENTINEL]),
+      symbol: Symbol(SENTINEL),
+      toJSON: () => { toJsonCalls += 1; return SENTINEL; },
+    };
+    Object.defineProperty(input, 'getter', {
+      enumerable: true,
+      get: () => { getterCalls += 1; return SENTINEL; },
+    });
+    input.self = input;
+
+    const result = redactSecrets(input, [SENTINEL]);
+    const serialized = JSON.stringify(result);
+
+    expect(toJsonCalls).toBe(0);
+    expect(getterCalls).toBe(0);
+    expect(serialized).not.toContain(SENTINEL);
+    expect(serialized).toContain('[Circular]');
+  });
+
+  it('sanitizes a Session without changing its Date-valued fields or structure', () => {
+    const createdAt = new Date('2026-08-08T00:00:00.000Z');
+    const updatedAt = new Date('2026-08-08T00:01:00.000Z');
+    const session = {
+      id: 'typed-session',
+      createdAt,
+      updatedAt,
+      task: `task ${SENTINEL}`,
+      messages: [{ role: 'assistant' as const, content: `echo ${SENTINEL}` }],
+      toolCalls: [{
+        timestamp: new Date('2026-08-08T00:00:30.000Z'),
+        toolName: 'read_file',
+        params: { value: SENTINEL },
+        result: { success: false, output: '', error: SENTINEL },
+        guardrailCheck: 'passed' as const,
+      }],
+      feedbackRuns: [],
+      status: 'completed' as const,
+      conclusion: `done ${SENTINEL}`,
+    } satisfies Session & { updatedAt: Date };
+
+    const result = sanitizeSessionSecrets(session, [SENTINEL]);
+
+    expect(result.createdAt).toBeInstanceOf(Date);
+    expect(result.updatedAt).toBeInstanceOf(Date);
+    expect(result.toolCalls[0]?.timestamp).toBeInstanceOf(Date);
+    expect(result.createdAt.toISOString()).toBe('2026-08-08T00:00:00.000Z');
+    expect(result.updatedAt?.toISOString()).toBe('2026-08-08T00:01:00.000Z');
+    expect(JSON.stringify(result)).not.toContain(SENTINEL);
+    expect(session.task).toContain(SENTINEL);
+    expect(session.createdAt).toBe(createdAt);
   });
 });

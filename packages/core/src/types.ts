@@ -4,7 +4,7 @@
 // ── LLM Layer ──
 
 export interface LLMAdapter {
-  sendMessage(context: AgentContext): Promise<AgentResponse>;
+  sendMessage(context: AgentContext, signal?: AbortSignal): Promise<AgentResponse>;
 }
 
 export interface AgentContext {
