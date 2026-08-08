@@ -104,7 +104,7 @@ Brainstorming 阶段（使用 `superpowers:brainstorming` 技能）产出了几�
 
 1. **接口优先设计**：Brainstorming 技能推动在实现前定义所有接口（types.ts）。这使得 Phase 2+ 的实现直截了当——每个组件都有清晰的合约。
 
-2. **Mock 优先测试**：早期构建 MockLLMAdapter 的决策带来了巨大回报。所有 278 个测试无需 API 调用即可确定性运行，使 CI 快速可靠。
+2. **Mock 优先测试**：早期构建 MockLLMAdapter 的决策带来了巨大回报。所有 450+ 个测试无需 API 调用即可确定性运行，使 CI 快速可靠。
 
 3. **关注点分离**：Harness 做工程、LLM 做智能的清晰边界防止了范围蔓延。反馈闭环是完美例子：它提供上下文，而非修复。
 

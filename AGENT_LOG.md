@@ -131,7 +131,7 @@
   - 公开模式 UI 使用结构化 allowlist 投影而非正则替换，确保任意格式输入不回显
   - 生命周期控制使用 runGeneration 模式，确保卸载/切换后迟到响应被丢弃
 - **测试数:** 284 核心 + 175 服务端 = 459 测试
-- **状态:** Tasks 1-6 完成，Task 7 修复轮 1 完成，Task 8 进行中
+- **状态:** Tasks 1-6 完成，Task 7 修复轮 1 完成，Task 8 完成
 - **学到的教训:** 安全关键功能需要形式化生命周期管理（generation 计数器 + 挂载守卫 + AbortController 三重保障），仅靠 mounted ref 不足以防止迟到异步操作
 - **Tasks:** 代码审查（4 个严重问题修复）、回溯分支/PR 创建、AGENT_LOG.md 补充
 - **Skills:** superpowers:requesting-code-review（代码审查）
@@ -157,3 +157,12 @@
   - `phase-8-server-frontend` → PR #8
   - `phase-9-finalization` → PR #9
 - **学到的教训:** 开发初期应使用 git worktree（`git worktree add`）隔离各 Phase 的工作区，避免 master 线性历史导致无法生成独立 PR。本项目的回溯 PR 虽然创建成功，但 cherry-pick 改变了 commit hash，丢失了原始 commit 与 GitHub 的关联。建议在 AI4SE 期末项目中引以为鉴，开发时主动使用 worktree。
+
+## 2026-08-08 — Session status 修复（Phase 10 收尾）
+- **Commit:** `2bd85c3`
+- **问题:** `AgentLoop.buildSession()` 将 `'max_iterations'` 直接 cast 为 `Session['status']`，导致会话保存 `status: 'max_iterations'`（非有效值），SessionHistory 徽章显示"运行中"而非"已完成"
+- **修复:**
+  - Core: `buildSession()` 中将 `'max_iterations'` 映射为 `'completed'`
+  - UI: `SessionHistory.tsx` 增加对 `'max_iterations'` 的 fallback 处理
+- **测试验证:** 450+ 测试通过，确认会话状态正确保存为 `'completed'`
+- **状态:** 完成

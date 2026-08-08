@@ -46,7 +46,7 @@ npm install
 # 构建所有包
 npm run build
 
-# 运行所有测试（278 个测试）
+# 运行所有测试（450+ 个测试）
 npm test
 
 # 启动服务
