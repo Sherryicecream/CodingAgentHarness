@@ -1,32 +1,11 @@
-import express from 'express';
-import cors from 'cors';
-import { agentRouter } from './routes/agent.js';
-import { sessionRouter } from './routes/session.js';
-import { configRouter } from './routes/config.js';
+import { createApp } from './app.js';
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+const app = createApp();
+const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
+const HOST = process.env.HOST || '127.0.0.1';
 
-// API routes
-app.use('/api/agent', agentRouter);
-app.use('/api/sessions', sessionRouter);
-app.use('/api/config', configRouter);
-
-// Health check
-app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
-
-// In production, serve the built frontend
-if (process.env.NODE_ENV === 'production') {
-  app.use(express.static('dist/client'));
-  app.get('*', (_req, res) => {
-    res.sendFile('dist/client/index.html', { root: '.' });
-  });
-}
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Harness 服务已启动：http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`Harness server started: http://${HOST}:${PORT}`);
 });
 
 export default app;
