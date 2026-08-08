@@ -153,9 +153,9 @@ const buildModuleGraph = async (entry: string): Promise<ModuleGraph> => {
 };
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.resetModules();
-  vi.clearAllMocks();
   await Promise.all(closeApp.splice(0).map((close) => close()));
   await Promise.all(temporaryRoots.splice(0).map((root) => (
     rm(root, { recursive: true, force: true })
@@ -327,5 +327,9 @@ describe('public demo capability boundary', () => {
     const app = await serverModule.startServer();
     closeApp.push(app.close);
     expect(listen).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores the real HTTP listen implementation after server import coverage', () => {
+    expect(vi.isMockFunction(Server.prototype.listen)).toBe(false);
   });
 });
