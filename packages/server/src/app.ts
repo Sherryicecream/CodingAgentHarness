@@ -2,8 +2,8 @@ import { isIP } from 'node:net';
 import { join } from 'node:path';
 import cors from 'cors';
 import express, { type Express } from 'express';
-import { createSessionStore, type SessionStore } from '@harness/core';
-import { createCredentialStore, type CredentialStore } from './credential-store.js';
+import type { SessionStore } from '../../core/src/loop/session-store.js';
+import type { CredentialStore } from './credential-store.js';
 import {
   createAgentRouter,
   createDefaultAgentRun,
@@ -138,10 +138,9 @@ export const createApp = (options: AppOptions = {}): HarnessApp => {
   const workspaceRoot = options.workspaceRoot
     ?? process.env.HARNESS_WORKSPACE_ROOT
     ?? join(process.cwd(), '.harness-workspaces');
-  const credentialStore = options.credentialStore
-    ?? (policy.allowServerCredentials ? createCredentialStore() : disabledCredentialStore());
+  const credentialStore = options.credentialStore ?? disabledCredentialStore();
   const sessionStore = policy.mode === 'local'
-    ? options.sessionStore ?? createSessionStore('.harness-sessions')
+    ? options.sessionStore
     : undefined;
   const workspaceManager = options.workspaceManager ?? createWorkspaceManager({ root: workspaceRoot });
   const sessionRegistry = options.sessionRegistry ?? createSessionRegistry({
@@ -169,8 +168,12 @@ export const createApp = (options: AppOptions = {}): HarnessApp => {
       now: options.now,
     }),
     now: options.now,
-    fetchImpl: options.fetchImpl,
-    credentialStore,
+    testKeyHandler: policy.allowServerCredentials
+      ? async (req, res) => {
+          const { handleTestKey } = await import('./routes/test-key.js');
+          await handleTestKey({ credentialStore, fetchImpl: options.fetchImpl }, req, res);
+        }
+      : undefined,
     runRateLimit: {
       limit: options.runRateLimit?.limit
         ?? positiveIntegerFromEnvironment('HARNESS_RUN_RATE_LIMIT'),

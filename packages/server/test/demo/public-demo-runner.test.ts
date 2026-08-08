@@ -48,10 +48,15 @@ describe('public demo runner', () => {
   it('demonstrates governance and feedback in order and leaves the corrected file', async () => {
     const { session, workspaceManager } = await createDemoSession('ordered-demo');
     const events: Array<Pick<SSEEvent, 'type' | 'data'>> = [];
+    const dangerousExecutor = vi.fn(async () => ({
+      success: true,
+      output: 'must never execute',
+    }));
     const runner = createPublicDemoRunner({
       emit: (type, data) => { events.push({ type, data }); },
       workspaceManager,
       now: () => new Date('2026-08-08T00:00:00.000Z'),
+      dangerousExecutor,
     });
 
     const result = await runner.run(session);
@@ -61,7 +66,7 @@ describe('public demo runner', () => {
       stage: (event.data as { stage?: string }).stage,
     }))).toEqual([
       { type: 'tool_call', stage: 'initial_write' },
-      { type: 'guardrail', stage: 'dangerous_action_blocked' },
+      { type: 'tool_call', stage: 'dangerous_action_blocked' },
       { type: 'loop_step', stage: 'validation_failed' },
       { type: 'feedback', stage: 'structured_feedback' },
       { type: 'tool_call', stage: 'corrected_write' },
@@ -69,8 +74,15 @@ describe('public demo runner', () => {
       { type: 'complete', stage: 'demo_complete' },
     ]);
     expect(events[1]?.data).toEqual(expect.objectContaining({
-      decision: 'blocked',
-      executed: false,
+      name: 'write_file',
+      riskLevel: 'dangerous',
+      status: 'failed',
+      result: { success: false, output: '', error: 'BLOCKED_BY_GOVERNANCE' },
+    }));
+    expect(events[0]?.data).toEqual(expect.objectContaining({
+      name: 'write_file',
+      context: { messageCount: 1, toolNames: ['write_file'] },
+      dispatch: 'registry',
     }));
     expect(events[3]?.data).toEqual(expect.objectContaining({
       status: 'fail',
@@ -79,8 +91,22 @@ describe('public demo runner', () => {
       }),
     }));
     expect(result).toEqual({ status: 'completed', sessionId: 'ordered-demo' });
+    expect(dangerousExecutor).not.toHaveBeenCalled();
+    expect(events.some((event) => event.type === 'guardrail')).toBe(false);
     await expect(readFile(join(session.workspace, 'demo.ts'), 'utf8'))
       .resolves.toBe("export const greeting = 'hello, harness';\n");
+  });
+
+  it('rejects a forged session workspace that does not match the manager-issued path', async () => {
+    const { session, workspaceManager } = await createDemoSession('issued-demo');
+    const outside = await mkdtemp(join(tmpdir(), 'harness-forged-demo-'));
+    temporaryRoots.push(outside);
+    const forged = { ...session, workspace: outside };
+    const runner = createPublicDemoRunner({ emit: () => undefined, workspaceManager });
+
+    await expect(runner.run(forged)).rejects.toThrow(/issued|workspace|mismatch/i);
+    await expect(readFile(join(outside, 'demo.ts'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('has a runtime dependency graph with no process or network capability', async () => {
@@ -146,7 +172,7 @@ describe('public demo runner', () => {
     await expect(completion).rejects.toThrow('DEMO_ABORTED');
     expect(events).toEqual([]);
     await expect(readFile(join(session.workspace, 'demo.ts'), 'utf8'))
-      .resolves.toBe("export const greeting = 'hello';\n");
+      .rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('keeps concurrent runs deterministic and isolated on one runner instance', async () => {

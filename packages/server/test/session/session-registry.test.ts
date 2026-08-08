@@ -128,6 +128,11 @@ describe('createSessionRegistry', () => {
     const actualManager = createWorkspaceManager({ root });
     const flakyManager: WorkspaceManager = {
       create: (sessionId) => actualManager.create(sessionId),
+      getIssuedPath: (sessionId) => actualManager.getIssuedPath(sessionId),
+      assertIssued: (sessionId, path) => actualManager.assertIssued(sessionId, path),
+      writeIssuedFile: (sessionId, filePath, content) => (
+        actualManager.writeIssuedFile(sessionId, filePath, content)
+      ),
       async remove(sessionId) {
         if (sessionId === 'first' && !failedFirstRemoval) {
           failedFirstRemoval = true;

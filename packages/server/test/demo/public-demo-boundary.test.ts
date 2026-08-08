@@ -1,0 +1,231 @@
+import { existsSync } from 'node:fs';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import request from 'supertest';
+import ts from 'typescript';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { SSEEvent, SSEManager } from '../../src/sse/sse-manager.js';
+
+const temporaryRoots: string[] = [];
+const closeApp: Array<() => void | Promise<void>> = [];
+const coreEntry = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../../core/src/index.ts',
+);
+
+const resolveSourceImport = (from: string, specifier: string): string | null => {
+  if (specifier === '@harness/core') {
+    return coreEntry;
+  }
+  if (!specifier.startsWith('.')) return null;
+  const candidate = resolve(dirname(from), specifier);
+  const paths = [
+    candidate.replace(/\.js$/, '.ts'),
+    `${candidate}.ts`,
+    join(candidate, 'index.ts'),
+  ];
+  return paths.find((path) => existsSync(path)) ?? null;
+};
+
+const importClauseHasRuntimeValue = (clause: ts.ImportClause | undefined): boolean => {
+  if (!clause) return true;
+  if (clause.isTypeOnly || clause.name) return !clause.isTypeOnly;
+  if (!clause.namedBindings || ts.isNamespaceImport(clause.namedBindings)) return true;
+  return clause.namedBindings.elements.some((element) => !element.isTypeOnly);
+};
+
+interface ModuleGraph {
+  readonly eagerFiles: ReadonlySet<string>;
+  readonly eagerExternalImports: ReadonlySet<string>;
+  readonly lazyImports: ReadonlySet<string>;
+}
+
+const within = async <T>(operation: PromiseLike<T>, label: string): Promise<T> => {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve(operation),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out: ${label}`)), 1_000);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
+
+const waitForEvent = async (
+  events: readonly SSEEvent[],
+  type: SSEEvent['type'],
+): Promise<void> => {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (events.some((event) => event.type === type)) return;
+    await new Promise<void>((resolveTurn) => setTimeout(resolveTurn, 10));
+  }
+  throw new Error(`Timed out waiting for ${type} event`);
+};
+
+const buildModuleGraph = async (entry: string): Promise<ModuleGraph> => {
+  const eagerFiles = new Set<string>();
+  const eagerExternalImports = new Set<string>();
+  const lazyImports = new Set<string>();
+
+  const visit = async (file: string): Promise<void> => {
+    if (eagerFiles.has(file)) return;
+    eagerFiles.add(file);
+    const source = await readFile(file, 'utf8');
+    const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
+
+    const follow = async (specifier: string): Promise<void> => {
+      const dependency = resolveSourceImport(file, specifier);
+      if (dependency) {
+        await visit(dependency);
+      } else {
+        eagerExternalImports.add(specifier);
+      }
+    };
+    for (const statement of parsed.statements) {
+      if (
+        ts.isImportDeclaration(statement)
+        && ts.isStringLiteral(statement.moduleSpecifier)
+        && importClauseHasRuntimeValue(statement.importClause)
+      ) {
+        await follow(statement.moduleSpecifier.text);
+      }
+      if (
+        ts.isExportDeclaration(statement)
+        && !statement.isTypeOnly
+        && statement.moduleSpecifier
+        && ts.isStringLiteral(statement.moduleSpecifier)
+      ) {
+        await follow(statement.moduleSpecifier.text);
+      }
+    }
+    const requiredImports: string[] = [];
+    const inspectCalls = (node: ts.Node): void => {
+      if (
+        ts.isCallExpression(node)
+        && node.arguments.length === 1
+        && ts.isStringLiteral(node.arguments[0]!)
+      ) {
+        const specifier = node.arguments[0]!.text;
+        if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+          lazyImports.add(specifier);
+        } else if (ts.isIdentifier(node.expression) && node.expression.text === 'require') {
+          requiredImports.push(specifier);
+        }
+      }
+      ts.forEachChild(node, inspectCalls);
+    };
+    inspectCalls(parsed);
+    for (const specifier of requiredImports) await follow(specifier);
+  };
+
+  await visit(entry);
+  return { eagerFiles, eagerExternalImports, lazyImports };
+};
+
+afterEach(async () => {
+  vi.resetModules();
+  vi.clearAllMocks();
+  await Promise.all(closeApp.splice(0).map((close) => close()));
+  await Promise.all(temporaryRoots.splice(0).map((root) => (
+    rm(root, { recursive: true, force: true })
+  )));
+});
+
+describe('public demo capability boundary', () => {
+  it('keeps provider, credentials, and process capabilities out of the real app eager graph', async () => {
+    const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../src');
+    const appGraph = await buildModuleGraph(join(sourceRoot, 'app.ts'));
+    const serverGraph = await buildModuleGraph(join(sourceRoot, 'server.ts'));
+    const prohibitedFiles = [...new Set([
+      ...appGraph.eagerFiles,
+      ...serverGraph.eagerFiles,
+    ])].filter((file) => (
+      /[\\/](?:credential-store|privileged-agent-run|tool-registry-factory|deepseek|test-runner|execute-shell|run-tests|git-diff|git-commit)\.ts$/.test(file)
+    ));
+    const prohibitedExternal = [...new Set([
+      ...appGraph.eagerExternalImports,
+      ...serverGraph.eagerExternalImports,
+    ])].filter((specifier) => (
+      /^(?:node:)?child_process$/.test(specifier)
+    ));
+
+    expect({ prohibitedFiles, prohibitedExternal }).toEqual({
+      prohibitedFiles: [],
+      prohibitedExternal: [],
+    });
+    expect([...appGraph.lazyImports]).toEqual(expect.arrayContaining([
+      './privileged-agent-run.js',
+      './routes/test-key.js',
+    ]));
+    expect([...serverGraph.lazyImports]).toEqual(expect.arrayContaining([
+      './credential-store.js',
+      '@harness/core',
+    ]));
+  });
+
+  it('serves a real HTTP demo without loading credential, provider, or process modules', async () => {
+    vi.doMock('@harness/core', () => {
+      throw new Error('CORE_BARREL_LOADED');
+    });
+    vi.doMock('node:child_process', () => {
+      throw new Error('CHILD_PROCESS_MODULE_LOADED');
+    });
+    vi.doMock('../../src/credential-store.js', () => {
+      throw new Error('CREDENTIAL_MODULE_LOADED');
+    });
+    vi.doMock('../../../core/src/llm/deepseek.js', () => {
+      throw new Error('PROVIDER_MODULE_LOADED');
+    });
+    vi.doMock('../../../core/src/feedback/test-runner.js', () => {
+      throw new Error('PROCESS_MODULE_LOADED');
+    });
+    vi.doMock('../../../core/src/tools/execute-shell.js', () => {
+      throw new Error('PROCESS_TOOL_MODULE_LOADED');
+    });
+    vi.doMock('../../src/tool-registry-factory.js', () => {
+      throw new Error('PROCESS_REGISTRY_MODULE_LOADED');
+    });
+    vi.doMock('../../src/agent/privileged-agent-run.js', () => {
+      throw new Error('PRIVILEGED_AGENT_MODULE_LOADED');
+    });
+    vi.doMock('../../src/routes/test-key.js', () => {
+      throw new Error('CREDENTIAL_ROUTE_MODULE_LOADED');
+    });
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'harness-demo-boundary-'));
+    temporaryRoots.push(workspaceRoot);
+    const events: SSEEvent[] = [];
+    const sseManager: SSEManager = {
+      createConnection: () => undefined,
+      disconnect: () => undefined,
+      setSecrets: () => undefined,
+      clearSecrets: () => undefined,
+      push: (_sessionId, event) => { events.push(event); },
+      close: () => undefined,
+    };
+
+    const { createApp } = await import('../../src/app.js');
+    const app = createApp({
+      mode: 'public',
+      workspaceRoot,
+      idGenerator: () => 'boundary-demo',
+      sseManager,
+    });
+    closeApp.push(app.close);
+    await within(request(app).post('/api/agent/sessions').send({}), 'issue session');
+    const started = await within(request(app).post('/api/agent/run').send({
+      sessionId: 'boundary-demo',
+      task: 'show the safe demo',
+      mode: 'demo',
+    }), 'start demo');
+    await waitForEvent(events, 'complete');
+
+    expect(started.status).toBe(202);
+    expect(events.some((event) => event.type === 'complete')).toBe(true);
+  });
+});

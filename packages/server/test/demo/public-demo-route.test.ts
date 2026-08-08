@@ -17,9 +17,10 @@ vi.mock('node:child_process', () => {
 });
 
 const waitFor = async (predicate: () => boolean): Promise<void> => {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
     if (predicate()) return;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
   }
   throw new Error('Timed out waiting for demo completion');
 };
@@ -70,7 +71,9 @@ describe('public demo route', () => {
       task: 'show the safety mechanisms',
       mode: 'demo',
     });
-    await waitFor(() => events.some((event) => event.type === 'complete'));
+    await waitFor(() => events.some((event) => (
+      event.type === 'complete' || event.type === 'error'
+    )));
     const rejectedKey = await request(app).post('/api/agent/run').send({
       sessionId: issued.body.sessionId,
       task: 'show the safety mechanisms',
@@ -89,6 +92,19 @@ describe('public demo route', () => {
         'validation_passed',
         'demo_complete',
       ]);
+    const blocked = events.find((event) => (
+      (event.data as { stage?: string }).stage === 'dangerous_action_blocked'
+    ));
+    expect(blocked).toEqual(expect.objectContaining({
+      type: 'tool_call',
+      data: expect.objectContaining({
+        name: 'write_file',
+        riskLevel: 'dangerous',
+        status: 'failed',
+        result: { success: false, output: '', error: 'BLOCKED_BY_GOVERNANCE' },
+      }),
+    }));
+    expect(events.some((event) => event.type === 'guardrail')).toBe(false);
     await expect(readFile(join(workspaceRoot, 'routed-demo', 'demo.ts'), 'utf8'))
       .resolves.toBe("export const greeting = 'hello, harness';\n");
     expect(rejectedKey.status).toBe(400);

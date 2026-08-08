@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import * as nodeFs from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 export interface WorkspaceStats {
   readonly dev: bigint;
@@ -15,6 +15,11 @@ export interface WorkspaceFileSystem {
   realpath(path: string): Promise<string>;
   rename(oldPath: string, newPath: string): Promise<void>;
   rm(path: string, options: { recursive: true; force: true }): Promise<void>;
+  writeFile?(
+    path: string,
+    data: string,
+    options: { encoding: 'utf8'; flag: 'wx'; mode: number },
+  ): Promise<void>;
 }
 
 export interface WorkspaceManagerOptions {
@@ -25,6 +30,9 @@ export interface WorkspaceManagerOptions {
 
 export interface WorkspaceManager {
   create(sessionId: string): Promise<string>;
+  getIssuedPath(sessionId: string): string | null;
+  assertIssued(sessionId: string, path: string): string;
+  writeIssuedFile(sessionId: string, filePath: string, content: string): Promise<void>;
   remove(sessionId: string): Promise<void>;
 }
 
@@ -191,7 +199,76 @@ export const createWorkspaceManager = (
     await fs.rm(quarantinePath, { recursive: true, force: true });
   };
 
+  const assertIssuedWorkspace = async (
+    sessionId: string,
+    root: CanonicalRoot,
+  ): Promise<IssuedWorkspace> => {
+    const workspace = issuedWorkspaces.get(sessionId);
+    if (!workspace || workspace.location !== 'issued') {
+      throw new Error(`Workspace was not issued for session id: ${sessionId}`);
+    }
+    assertDirectChild(root.path, workspace.path);
+    await assertIdentity(root.path, root.identity);
+    await assertIdentity(workspace.path, workspace.identity);
+    return workspace;
+  };
+
+  const ensureStableAncestors = async (
+    workspace: IssuedWorkspace,
+    targetParent: string,
+  ): Promise<Array<{ path: string; identity: string }>> => {
+    const relativeParent = relative(workspace.path, targetParent);
+    if (relativeParent.startsWith('..') || isAbsolute(relativeParent)) {
+      throw new Error('File target is outside the issued workspace');
+    }
+    const ancestors: Array<{ path: string; identity: string }> = [];
+    let current = workspace.path;
+    for (const segment of relativeParent.split(sep).filter(Boolean)) {
+      current = resolve(join(current, segment));
+      try {
+        const identity = await readDirectoryIdentity(current);
+        ancestors.push({ path: current, identity });
+      } catch (error) {
+        if (errorCode(error) !== 'ENOENT') throw error;
+        try {
+          await fs.mkdir(current, { mode: 0o700 });
+        } catch (mkdirError) {
+          if (errorCode(mkdirError) !== 'EEXIST') throw mkdirError;
+        }
+        const identity = await readDirectoryIdentity(current);
+        ancestors.push({ path: current, identity });
+      }
+      await assertIdentity(workspace.path, workspace.identity);
+    }
+    return ancestors;
+  };
+
+  const assertTargetIsReplaceable = async (target: string): Promise<void> => {
+    try {
+      const stats = await fs.lstat(target, { bigint: true });
+      if (stats.isSymbolicLink()) throw new Error('File target is a symbolic link');
+      if (stats.isDirectory()) throw new Error('File target is a directory');
+    } catch (error) {
+      if (errorCode(error) !== 'ENOENT') throw error;
+    }
+  };
+
   return {
+    getIssuedPath(sessionId) {
+      assertValidSessionId(sessionId);
+      const workspace = issuedWorkspaces.get(sessionId);
+      return workspace?.location === 'issued' ? workspace.path : null;
+    },
+
+    assertIssued(sessionId, path) {
+      assertValidSessionId(sessionId);
+      const workspace = issuedWorkspaces.get(sessionId);
+      if (workspace?.location !== 'issued' || workspace.path !== path) {
+        throw new Error('Workspace path does not match the server-issued session path');
+      }
+      return workspace.path;
+    },
+
     async create(sessionId) {
       assertValidSessionId(sessionId);
       if (issuedWorkspaces.has(sessionId)) {
@@ -245,6 +322,60 @@ export const createWorkspaceManager = (
           );
         }
         throw error;
+      }
+    },
+
+    async writeIssuedFile(sessionId, filePath, content) {
+      assertValidSessionId(sessionId);
+      if (typeof filePath !== 'string' || filePath.length === 0 || isAbsolute(filePath)) {
+        throw new Error('Invalid workspace file path');
+      }
+      if (filePath.split(/[\\/]/).some((segment) => segment.toLowerCase() === '.git')) {
+        throw new Error('Repository metadata is protected');
+      }
+      const root = await getCanonicalRoot();
+      const workspace = await assertIssuedWorkspace(sessionId, root);
+      const target = resolve(join(workspace.path, filePath));
+      if (target === workspace.path || !target.startsWith(`${workspace.path}${sep}`)) {
+        throw new Error('File target is outside the issued workspace');
+      }
+      const targetParent = dirname(target);
+      const ancestors = await ensureStableAncestors(workspace, targetParent);
+      await assertTargetIsReplaceable(target);
+      const temporary = resolve(join(
+        targetParent,
+        `.harness-write-${randomUUID()}.tmp`,
+      ));
+      if (dirname(temporary) !== targetParent) {
+        throw new Error('Invalid temporary write target');
+      }
+      let renamed = false;
+      try {
+        const writeFile = fs.writeFile ?? nodeFs.writeFile;
+        await writeFile(temporary, content, {
+          encoding: 'utf8',
+          flag: 'wx',
+          mode: 0o600,
+        });
+        const temporaryStats = await fs.lstat(temporary, { bigint: true });
+        if (temporaryStats.isDirectory() || temporaryStats.isSymbolicLink()) {
+          throw new Error('Temporary write target changed');
+        }
+        await assertIdentity(root.path, root.identity);
+        await assertIdentity(workspace.path, workspace.identity);
+        for (const ancestor of ancestors) {
+          await assertIdentity(ancestor.path, ancestor.identity);
+        }
+        await assertTargetIsReplaceable(target);
+        await fs.rename(temporary, target);
+        renamed = true;
+        await assertIdentity(root.path, root.identity);
+        await assertIdentity(workspace.path, workspace.identity);
+        await assertTargetIsReplaceable(target);
+      } finally {
+        if (!renamed) {
+          await fs.rm(temporary, { recursive: true, force: true });
+        }
       }
     },
 

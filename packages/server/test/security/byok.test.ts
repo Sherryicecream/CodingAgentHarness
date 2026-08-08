@@ -220,7 +220,7 @@ describe('BYOK request security', () => {
     const response = await request(app)
       .post('/api/agent/run')
       .send({ sessionId: 'byok-session', task: 'work', mode: 'byok', apiKey: SENTINEL });
-    await waitForAsyncCompletion();
+    await vi.waitFor(() => expect(released).toBe(true));
 
     expect(response.status).toBe(202);
     expect(saved).not.toContain(SENTINEL);
@@ -254,7 +254,7 @@ describe('BYOK request security', () => {
     await request(app)
       .post('/api/agent/run')
       .send({ sessionId: 'byok-session', task: 'work', mode: 'byok', apiKey: SENTINEL });
-    await waitForAsyncCompletion();
+    await vi.waitFor(() => expect(warnings).toContain('SESSION_HISTORY_SAVE_FAILED'));
 
     expect(warnings).toContain('SESSION_HISTORY_SAVE_FAILED');
     expect(sse.events.some((event) => (
@@ -296,7 +296,7 @@ describe('BYOK request security', () => {
     const response = await request(app)
       .post('/api/agent/run')
       .send({ sessionId: 'byok-session', task: 'work', mode: 'byok', apiKey: SENTINEL });
-    await waitForAsyncCompletion();
+    await vi.waitFor(() => expect(released).toBe(true));
     const serialized = JSON.stringify({ response: response.body, events, warnings });
 
     expect(response.status).toBe(202);
