@@ -36,7 +36,7 @@ const completedSession: Session = {
 };
 
 afterEach(async () => {
-  apps.splice(0).forEach((app) => app.close());
+  await Promise.all(apps.splice(0).map((app) => app.close()));
   await Promise.all(temporaryPaths.splice(0).map((path) => rm(path, {
     recursive: true,
     force: true,
@@ -110,5 +110,47 @@ describe('session history policy', () => {
 
     expect(started.status).toBe(202);
     expect(history.status).toBe(404);
+  });
+
+  it('persists the terminal result produced by an approved continuation', async () => {
+    const sessions = new Map<string, Session>();
+    const sessionStore: SessionStore = {
+      async save(session) { sessions.set(session.id, session); },
+      async load(id) { return sessions.get(id) ?? null; },
+      async list() { return [...sessions.values()]; },
+      async delete(id) { sessions.delete(id); },
+    };
+    const app = createApp({
+      mode: 'local',
+      workspaceRoot: await createRoot(),
+      idGenerator: () => 'approved-history',
+      credentialStore: emptyCredentials,
+      sessionStore,
+      agentRun: () => ({
+        completion: Promise.resolve({ status: 'blocked' }),
+        continueAfterApproval: async () => ({
+          status: 'completed',
+          sessionId: completedSession.id,
+          session: completedSession,
+        }),
+      }),
+    });
+    apps.push(app);
+    await request(app).post('/api/agent/sessions').send({});
+    await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'approved-history', task: 'work', mode: 'server' });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const approved = await request(app)
+      .post('/api/agent/approve')
+      .send({ sessionId: 'approved-history' });
+    expect(approved.status).toBe(200);
+    await vi.waitFor(() => expect(sessions.size).toBe(1));
+
+    const history = await request(app).get('/api/sessions');
+    expect(history.body.sessions[0]).toMatchObject({
+      id: completedSession.id,
+      status: 'completed',
+    });
   });
 });

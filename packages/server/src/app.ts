@@ -35,7 +35,7 @@ export interface IntervalScheduler {
 }
 
 export type HarnessApp = Express & {
-  close(): void;
+  close(): Promise<void>;
   sweepSessions(): Promise<void>;
 };
 
@@ -150,26 +150,7 @@ export const createApp = (options: AppOptions = {}): HarnessApp => {
     ?? positiveIntegerFromEnvironment('HARNESS_SESSION_SWEEP_INTERVAL_MS', MAX_TIMER_MS)
     ?? DEFAULT_SESSION_SWEEP_INTERVAL_MS;
   const logger = options.logger ?? console;
-  const sweepSessions = async (): Promise<void> => {
-    try {
-      await sessionRegistry.sweepExpired();
-    } catch {
-      logger.warn('SESSION_SWEEP_FAILED');
-    }
-  };
-  const sweepTimer = intervalScheduler.setInterval(sweepSessions, sweepIntervalMs);
-  sweepTimer.unref?.();
-  app.sweepSessions = sweepSessions;
-  app.close = () => intervalScheduler.clearInterval(sweepTimer);
-
-  app.disable('x-powered-by');
-  if (trustProxy !== false) {
-    app.set('trust proxy', trustProxy);
-  }
-  app.use(cors({ origin: false }));
-  app.use(express.json({ limit: '64kb' }));
-
-  app.use('/api/agent', createAgentRouter({
+  const agentRouter = createAgentRouter({
     policy,
     sessionRegistry,
     sseManager,
@@ -191,7 +172,54 @@ export const createApp = (options: AppOptions = {}): HarnessApp => {
     },
     logger,
     sessionStore,
-  }));
+  });
+  let closed = false;
+  let sweepInFlight: Promise<void> | null = null;
+  let closePromise: Promise<void> | null = null;
+  const sweepSessions = (): Promise<void> => {
+    if (closed) {
+      return Promise.resolve();
+    }
+    if (sweepInFlight) {
+      return sweepInFlight;
+    }
+    const operation = (async (): Promise<void> => {
+      try {
+        await agentRouter.expireActiveSessions();
+        await sessionRegistry.sweepExpired();
+      } catch {
+        logger.warn('SESSION_SWEEP_FAILED');
+      }
+    })();
+    const tracked = operation.finally(() => {
+      if (sweepInFlight === tracked) {
+        sweepInFlight = null;
+      }
+    });
+    sweepInFlight = tracked;
+    return tracked;
+  };
+  const sweepTimer = intervalScheduler.setInterval(sweepSessions, sweepIntervalMs);
+  sweepTimer.unref?.();
+  app.sweepSessions = sweepSessions;
+  app.close = (): Promise<void> => {
+    if (closePromise) {
+      return closePromise;
+    }
+    closed = true;
+    intervalScheduler.clearInterval(sweepTimer);
+    closePromise = (sweepInFlight ?? Promise.resolve()).then(() => undefined);
+    return closePromise;
+  };
+
+  app.disable('x-powered-by');
+  if (trustProxy !== false) {
+    app.set('trust proxy', trustProxy);
+  }
+  app.use(cors({ origin: false }));
+  app.use(express.json({ limit: '64kb' }));
+
+  app.use('/api/agent', agentRouter);
   if (sessionStore) {
     app.use('/api/sessions', createSessionRouter(sessionStore));
   }

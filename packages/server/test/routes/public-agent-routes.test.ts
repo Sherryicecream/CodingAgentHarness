@@ -9,7 +9,7 @@ import { createWorkspaceManager } from '../../src/session/workspace-manager.js';
 import type { SSEManager } from '../../src/sse/sse-manager.js';
 
 const temporaryPaths: string[] = [];
-const createdApps: Array<{ close?: () => void }> = [];
+const createdApps: Array<{ close?: () => void | Promise<void> }> = [];
 
 const createWorkspaceRoot = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'harness-public-routes-'));
@@ -32,7 +32,7 @@ const createPublicApp = async (overrides: Partial<AppOptions> = {}) => {
 };
 
 afterEach(async () => {
-  createdApps.splice(0).forEach((app) => app.close?.());
+  await Promise.all(createdApps.splice(0).map((app) => app.close?.()));
   vi.unstubAllEnvs();
   vi.useRealTimers();
   await Promise.all(temporaryPaths.splice(0).map((path) => rm(path, {
@@ -261,6 +261,53 @@ describe('public agent request boundaries', () => {
     expect(closeCalls).toBe(1);
   });
 
+  it('continues an approved blocked run to terminal cleanup and releases concurrency', async () => {
+    let resolveBlocked!: (value: { status: string }) => void;
+    const blockedCompletion = new Promise<{ status: string }>((resolve) => {
+      resolveBlocked = resolve;
+    });
+    let continuationCalls = 0;
+    let closeCalls = 0;
+    const ids = ['approval-first', 'approval-second'];
+    const app = await createPublicApp({
+      idGenerator: () => ids.shift()!,
+      maxConcurrent: 1,
+      sseManager: {
+        createConnection: () => undefined,
+        push: () => undefined,
+        close: () => { closeCalls += 1; },
+      },
+      agentRun: () => ({
+        completion: blockedCompletion,
+        approve: () => undefined,
+        continueAfterApproval: async () => {
+          continuationCalls += 1;
+          return { status: 'completed', sessionId: 'approved-terminal' };
+        },
+      }),
+    });
+    await request(app).post('/api/agent/sessions').send({});
+    await request(app).post('/api/agent/sessions').send({});
+    await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'approval-first', task: 'first', mode: 'demo' });
+    resolveBlocked({ status: 'blocked' });
+    await nextTurn();
+
+    const approved = await request(app)
+      .post('/api/agent/approve')
+      .send({ sessionId: 'approval-first' });
+    await nextTurn();
+    const second = await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'approval-second', task: 'second', mode: 'demo' });
+
+    expect(approved.status).toBe(200);
+    expect(continuationCalls).toBe(1);
+    expect(closeCalls).toBe(1);
+    expect(second.status).toBe(202);
+  });
+
   it('cleans a terminal run without a second transition or unhandled rejection', async () => {
     const root = await createWorkspaceRoot();
     const actualRegistry = createSessionRegistry({
@@ -413,6 +460,147 @@ describe('public agent request boundaries', () => {
     expect(expired.status).toBe(404);
   });
 
+  it('coordinates an active run to terminal state before sweeping its expired workspace', async () => {
+    let currentTime = new Date('2026-08-08T00:00:00.000Z');
+    const root = await createWorkspaceRoot();
+    const ids = ['expiring-active', 'after-expiry'];
+    let tick: (() => void | Promise<void>) | undefined;
+    let abortCalls = 0;
+    let abortSettled = false;
+    let sweepObservedAbortSettled = false;
+    let releaseAbort!: () => void;
+    const abortGate = new Promise<void>((resolve) => { releaseAbort = resolve; });
+    let closeCalls = 0;
+    const events: string[] = [];
+    const actualRegistry = createSessionRegistry({
+      workspaceManager: createWorkspaceManager({ root }),
+      now: () => new Date(currentTime),
+      idGenerator: () => ids.shift()!,
+      maxConcurrent: 1,
+    });
+    const sessionRegistry: SessionRegistry = {
+      ...actualRegistry,
+      async sweepExpired() {
+        sweepObservedAbortSettled = abortSettled;
+        return actualRegistry.sweepExpired();
+      },
+    };
+    const app = createApp({
+      mode: 'public',
+      workspaceRoot: root,
+      sessionRegistry,
+      now: () => new Date(currentTime),
+      agentRun: () => ({
+        completion: pendingRun(),
+        abort: async () => {
+          abortCalls += 1;
+          await abortGate;
+          abortSettled = true;
+        },
+      }),
+      sseManager: {
+        createConnection: () => undefined,
+        push: (_sessionId, event) => { events.push(event.type); },
+        close: () => { closeCalls += 1; },
+      },
+      intervalScheduler: {
+        setInterval(callback) {
+          tick = callback;
+          return { unref: () => undefined };
+        },
+        clearInterval: () => undefined,
+      },
+    });
+    createdApps.push(app);
+    await request(app).post('/api/agent/sessions').send({});
+    await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'expiring-active', task: 'work', mode: 'demo' });
+    const workspace = join(root, 'expiring-active');
+
+    currentTime = new Date('2026-08-08T01:00:00.000Z');
+    const sweep = Promise.resolve(tick!());
+    await nextTurn();
+    let workspaceExistedUntilAbortSettled = true;
+    try {
+      await realpath(workspace);
+    } catch {
+      workspaceExistedUntilAbortSettled = false;
+    }
+    releaseAbort();
+    await sweep;
+
+    expect(workspaceExistedUntilAbortSettled).toBe(true);
+    await expect(realpath(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
+    const expired = await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'expiring-active', task: 'again', mode: 'demo' });
+    const newlyIssued = await request(app).post('/api/agent/sessions').send({});
+    const replacement = await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'after-expiry', task: 'replacement', mode: 'demo' });
+
+    expect(abortCalls).toBe(1);
+    expect(sweepObservedAbortSettled).toBe(true);
+    expect(closeCalls).toBe(1);
+    expect(events).toContain('error');
+    expect(expired.status).toBe(404);
+    expect(newlyIssued.status).toBe(201);
+    expect(replacement.status).toBe(202);
+  });
+
+  it('keeps an active workspace when abort fails and retries on the next sweep', async () => {
+    let currentTime = new Date('2026-08-08T00:00:00.000Z');
+    const root = await createWorkspaceRoot();
+    let tick: (() => void | Promise<void>) | undefined;
+    let abortAttempts = 0;
+    const warnings: unknown[] = [];
+    const app = createApp({
+      mode: 'public',
+      workspaceRoot: root,
+      idGenerator: () => 'abort-retry',
+      now: () => new Date(currentTime),
+      logger: {
+        error: () => undefined,
+        info: () => undefined,
+        warn: (message) => { warnings.push(message); },
+      },
+      agentRun: () => ({
+        completion: pendingRun(),
+        abort: async () => {
+          abortAttempts += 1;
+          if (abortAttempts === 1) {
+            throw new Error('injected abort failure');
+          }
+        },
+      }),
+      intervalScheduler: {
+        setInterval(callback) {
+          tick = callback;
+          return { unref: () => undefined };
+        },
+        clearInterval: () => undefined,
+      },
+    });
+    createdApps.push(app);
+    await request(app).post('/api/agent/sessions').send({});
+    await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'abort-retry', task: 'work', mode: 'demo' });
+    const workspace = join(root, 'abort-retry');
+
+    currentTime = new Date('2026-08-08T01:00:00.000Z');
+    await tick!();
+    const workspaceAfterFailure = await realpath(workspace);
+    await tick!();
+
+    expect(workspaceAfterFailure).toBe(workspace);
+    expect(abortAttempts).toBe(2);
+    expect(warnings).toContain('SESSION_ABORT_FAILED');
+    expect(warnings).toContain('SESSION_SWEEP_FAILED');
+    await expect(realpath(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('reports a failed sweep, retries on the next tick, and closes its timer', async () => {
     const root = await createWorkspaceRoot();
     const actualRegistry = createSessionRegistry({
@@ -462,6 +650,55 @@ describe('public agent request boundaries', () => {
     expect(warnings).toEqual(['SESSION_SWEEP_FAILED']);
     expect(unrefCalled).toBe(true);
     expect(cleared).toBe(true);
+  });
+
+  it('runs sweeps single-flight and close waits while preventing later ticks', async () => {
+    const root = await createWorkspaceRoot();
+    const actualRegistry = createSessionRegistry({
+      workspaceManager: createWorkspaceManager({ root }),
+    });
+    let releaseSweep!: () => void;
+    const sweepGate = new Promise<void>((resolve) => { releaseSweep = resolve; });
+    let sweepAttempts = 0;
+    const registry: SessionRegistry = {
+      ...actualRegistry,
+      async sweepExpired() {
+        sweepAttempts += 1;
+        await sweepGate;
+        return 0;
+      },
+    };
+    let tick: (() => void | Promise<void>) | undefined;
+    const app = createApp({
+      mode: 'public',
+      sessionRegistry: registry,
+      intervalScheduler: {
+        setInterval(callback) {
+          tick = callback;
+          return { unref: () => undefined };
+        },
+        clearInterval: () => undefined,
+      },
+    });
+    createdApps.push(app);
+
+    const first = Promise.resolve(tick!());
+    const overlapping = Promise.resolve(tick!());
+    await nextTurn();
+    let closeSettled = false;
+    const closePromise = Promise.resolve(app.close()).then(() => { closeSettled = true; });
+    await nextTurn();
+    const afterClose = Promise.resolve(tick!());
+    await nextTurn();
+    const attemptsWhileBlocked = sweepAttempts;
+    const settledBeforeRelease = closeSettled;
+    releaseSweep();
+    await Promise.all([first, overlapping, afterClose, closePromise]);
+
+    expect(attemptsWhileBlocked).toBe(1);
+    expect(settledBeforeRelease).toBe(false);
+    expect(closeSettled).toBe(true);
+    expect(sweepAttempts).toBe(1);
   });
 
   it('applies deployment rate-limit overrides from the environment', async () => {

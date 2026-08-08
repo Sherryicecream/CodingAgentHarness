@@ -55,8 +55,9 @@ export interface AgentRunOutput {
 
 export interface AgentRunHandle {
   readonly completion: Promise<AgentRunOutput | void>;
+  continueAfterApproval?(): Promise<AgentRunOutput | void>;
   approve?(approved: boolean): void;
-  abort?(): void;
+  abort?(): void | Promise<void>;
 }
 
 export type AgentRun = (
@@ -76,6 +77,10 @@ export interface AgentRouterDependencies {
   readonly logger?: Pick<Console, 'warn'>;
   readonly sessionStore?: SessionStore;
 }
+
+export type AgentRouter = Router & {
+  expireActiveSessions(): Promise<void>;
+};
 
 const normalizeClientKey = (req: Request): string => {
   const value = req.ip || req.socket.remoteAddress || 'unknown';
@@ -122,8 +127,8 @@ const toRunHandle = (
 
 export const createAgentRouter = (
   dependencies: AgentRouterDependencies,
-): Router => {
-  const router = Router();
+): AgentRouter => {
+  const router = Router() as AgentRouter;
   const now = dependencies.now ?? (() => new Date());
   const logger = dependencies.logger ?? console;
   interface ActiveRun {
@@ -168,20 +173,48 @@ export const createAgentRouter = (
       try {
         if (outcome === 'completed') {
           dependencies.sessionRegistry.complete(active.session.id, active.clientKey);
+        } else {
+          dependencies.sessionRegistry.fail(active.session.id, active.clientKey);
+        }
+      } catch {
+        logger.warn('SESSION_TERMINAL_TRANSITION_FAILED');
+      }
+      try {
+        if (outcome === 'completed') {
           emit(active.session.id, 'complete', {
             status: result?.status ?? 'completed',
             sessionId: result?.sessionId ?? active.session.id,
           });
         } else {
-          dependencies.sessionRegistry.fail(active.session.id, active.clientKey);
           emit(active.session.id, 'error', { error: 'AGENT_RUN_FAILED' });
         }
       } catch {
-        logger.warn('SESSION_TERMINAL_TRANSITION_FAILED');
+        logger.warn('SESSION_TERMINAL_EVENT_FAILED');
       }
     } finally {
       cleanupRun(active);
     }
+  };
+  const observeCompletion = (
+    active: ActiveRun,
+    completion: Promise<AgentRunOutput | void>,
+  ): void => {
+    void completion.then(async (result) => {
+      if (active.phase === 'terminal') {
+        return;
+      }
+      if (result?.status === 'blocked') {
+        active.phase = 'blocked';
+        emit(active.session.id, 'complete', {
+          status: result.status,
+          sessionId: result.sessionId,
+        });
+        return;
+      }
+      await finalizeRun(active, 'completed', result);
+    }, async () => {
+      await finalizeRun(active, 'failed');
+    }).catch(() => logger.warn('SESSION_FINALIZATION_FAILED'));
   };
 
   const runLimiter = rateLimit({
@@ -287,19 +320,7 @@ export const createAgentRouter = (
     };
     activeRuns.set(session.id, active);
     emit(session.id, 'loop_step', { phase: 'starting', mode: input.mode });
-    void handle.completion.then(async (result) => {
-      if (active.phase === 'terminal') {
-        return;
-      }
-      if (result?.status === 'blocked') {
-        active.phase = 'blocked';
-        emit(session.id, 'complete', { status: result.status, sessionId: result.sessionId });
-        return;
-      }
-      await finalizeRun(active, 'completed', result);
-    }, async () => {
-      await finalizeRun(active, 'failed');
-    }).catch(() => logger.warn('SESSION_FINALIZATION_FAILED'));
+    observeCompletion(active, handle.completion);
 
     res.status(202).json({ sessionId: session.id, status: 'started' });
   });
@@ -367,7 +388,7 @@ export const createAgentRouter = (
       return;
     }
     const active = activeRuns.get(sessionId);
-    if (!active?.handle.approve) {
+    if (!active) {
       res.status(404).json({ error: 'SESSION_NOT_FOUND' });
       return;
     }
@@ -377,22 +398,29 @@ export const createAgentRouter = (
     }
     if (!approved) {
       try {
-        active.handle.abort?.();
+        await active.handle.abort?.();
       } catch {
         logger.warn('SESSION_ABORT_FAILED');
       }
-      try {
-        active.handle.approve(false);
-      } catch {
-        logger.warn('SESSION_APPROVAL_FAILED');
+      if (active.handle.approve) {
+        try {
+          active.handle.approve(false);
+        } catch {
+          logger.warn('SESSION_APPROVAL_FAILED');
+        }
       }
       emit(sessionId, 'guardrail', { approved: false, sessionId });
       await finalizeRun(active, 'failed');
     } else {
+      if (!active.handle.continueAfterApproval) {
+        res.status(409).json({ error: 'APPROVAL_CONTINUATION_UNAVAILABLE' });
+        return;
+      }
       try {
-        active.handle.approve(true);
+        const continuation = active.handle.continueAfterApproval();
         active.phase = 'running';
         emit(sessionId, 'guardrail', { approved: true, sessionId });
+        observeCompletion(active, continuation);
       } catch {
         logger.warn('SESSION_APPROVAL_FAILED');
         res.status(500).json({ error: 'APPROVAL_FAILED' });
@@ -404,6 +432,22 @@ export const createAgentRouter = (
 
   router.post('/approve', handleApproval(true));
   router.post('/reject', handleApproval(false));
+
+  router.expireActiveSessions = async (): Promise<void> => {
+    const timestamp = now().getTime();
+    const expired = [...activeRuns.values()].filter((active) => (
+      active.session.expiresAt.getTime() <= timestamp
+    ));
+    for (const active of expired) {
+      try {
+        await active.handle.abort?.();
+      } catch (error) {
+        logger.warn('SESSION_ABORT_FAILED');
+        throw error;
+      }
+      await finalizeRun(active, 'failed');
+    }
+  };
 
   return router;
 };
@@ -454,13 +498,24 @@ export const createDefaultAgentRun = (
     config: { maxIterations: 10 },
     onEvent: (type, data) => emit(type as SSEEvent['type'], data),
   });
-  return {
-    completion: loop.run(task, session.workspace).then((result) => ({
+  const mapResult = (completion: ReturnType<AgentLoop['run']>): Promise<AgentRunOutput> => (
+    completion.then((result) => ({
       status: result.status,
       sessionId: result.session.id,
       session: result.session,
-    })),
+    }))
+  );
+  let activeCompletion = mapResult(loop.run(task, session.workspace));
+  return {
+    completion: activeCompletion,
+    continueAfterApproval: () => {
+      activeCompletion = mapResult(loop.continueAfterApproval(true));
+      return activeCompletion;
+    },
     approve: (approved) => loop.handleApproval(approved),
-    abort: () => loop.abort(),
+    abort: async () => {
+      loop.abort();
+      await activeCompletion.catch(() => undefined);
+    },
   };
 };

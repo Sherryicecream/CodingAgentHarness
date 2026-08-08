@@ -95,7 +95,7 @@ function makeDangerousTool(): Tool {
 }
 
 function buildDeps(overrides: Partial<AgentLoopDependencies> & {
-  llm: MockLLMAdapter;
+  llm: AgentLoopDependencies['llm'];
   tools: ToolRegistry;
   governance: GovernanceService;
   feedback: FeedbackLoop;
@@ -414,6 +414,49 @@ describe('AgentLoop', () => {
       // No messages should be processed because loop was aborted before first iteration
       expect(result.session.messages).toHaveLength(0);
     });
+
+    it('does not execute tool calls returned after an in-flight abort', async () => {
+      let resolveResponse!: (response: AgentResponse) => void;
+      let markRequestStarted!: () => void;
+      const requestStarted = new Promise<void>((resolve) => { markRequestStarted = resolve; });
+      const response = new Promise<AgentResponse>((resolve) => { resolveResponse = resolve; });
+      const llm = {
+        async sendMessage() {
+          markRequestStarted();
+          return response;
+        },
+      };
+      let executions = 0;
+      const tools = createToolRegistry();
+      const writeTool = makeWriteFileTool();
+      tools.register({
+        ...writeTool,
+        async execute(params) {
+          executions += 1;
+          return writeTool.execute(params);
+        },
+      });
+      const loop = createAgentLoop(buildDeps({
+        llm,
+        tools,
+        governance: createGovernanceService(),
+        feedback: makeMockFeedbackLoop(),
+        contextBuilder: createContextBuilder(),
+        stopCondition: createStopCondition(),
+      }));
+
+      const completion = loop.run('write after network response', '/tmp/test');
+      await requestStarted;
+      loop.abort();
+      resolveResponse(makeResponse('TASK_COMPLETE', [
+        makeToolCall('late-call', 'write_file', { path: '/tmp/late.ts', content: 'late' }),
+      ]));
+      const result = await completion;
+
+      expect(result.status).toBe('failed');
+      expect(executions).toBe(0);
+      expect(result.session.toolCalls).toHaveLength(0);
+    });
   });
 
   describe('handleApproval', () => {
@@ -439,6 +482,44 @@ describe('AgentLoop', () => {
       // Now HITL should be in waiting_user state
       // Approve the blocked action
       expect(() => loop.handleApproval(true)).not.toThrow();
+    });
+
+    it('continues a blocked run after approval without replaying completed work', async () => {
+      let dangerousExecutions = 0;
+      const dangerousTool = makeDangerousTool();
+      const tools = createToolRegistry();
+      tools.register({
+        ...dangerousTool,
+        async execute(params) {
+          dangerousExecutions += 1;
+          return dangerousTool.execute(params);
+        },
+      });
+      const governance = createGovernanceService({ blockedCommands: [] });
+      const llm = new MockLLMAdapter([
+        makeResponse('Approval is required.', [
+          makeToolCall('call_1', 'execute_shell', { command: 'rm -rf /tmp/owned-target' }),
+        ]),
+        makeResponse('Approved action completed. TASK_COMPLETE'),
+      ]);
+      const loop = createAgentLoop(buildDeps({
+        llm,
+        tools,
+        governance,
+        feedback: makeMockFeedbackLoop(),
+        contextBuilder: createContextBuilder(),
+        stopCondition: createStopCondition(),
+      }));
+
+      const blocked = await loop.run('Delete the owned target', '/tmp/test');
+      const completed = await loop.continueAfterApproval(true);
+
+      expect(blocked.status).toBe('blocked');
+      expect(completed.status).toBe('completed');
+      expect(dangerousExecutions).toBe(1);
+      expect(completed.session.toolCalls).toHaveLength(1);
+      expect(completed.session.toolCalls[0].toolName).toBe('execute_shell');
+      expect(llm.remainingCount).toBe(0);
     });
 
     it('should throw when handleApproval called without pending block', () => {
