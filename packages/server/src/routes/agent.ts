@@ -19,6 +19,7 @@ import {
 } from '@harness/core';
 import { createPolicyToolRegistry } from '../agent/tool-registry-factory.js';
 import type { CredentialStore } from '../credential-store.js';
+import { createPublicDemoRunner } from '../demo/public-demo-runner.js';
 import { isSecureByokRequest } from '../security/request-security.js';
 import { sanitizeSessionSecrets } from '../security/secret-redactor.js';
 import type { RuntimeExperience, RuntimePolicy } from '../security/runtime-policy.js';
@@ -29,6 +30,7 @@ import {
   type PublicSession,
   type SessionRegistry,
 } from '../session/session-registry.js';
+import type { WorkspaceManager } from '../session/workspace-manager.js';
 import type { SSEEvent, SSEManager } from '../sse/sse-manager.js';
 
 const DEFAULT_RUN_RATE_WINDOW_MS = 60 * 60 * 1_000;
@@ -54,6 +56,7 @@ export interface AgentRunOutput {
   readonly status: string;
   readonly sessionId?: string;
   readonly session?: Session;
+  readonly completionData?: Readonly<Record<string, unknown>>;
 }
 
 export interface AgentRunHandle {
@@ -291,6 +294,7 @@ export const createAgentRouter = (
       try {
         if (outcome === 'completed') {
           emit(active.session.id, 'complete', {
+            ...result?.completionData,
             status: result?.status ?? 'completed',
             sessionId: result?.sessionId ?? active.session.id,
           });
@@ -526,7 +530,11 @@ export const createAgentRouter = (
     };
     activeRuns.set(session.id, active);
     const emitWhileActive = (type: SSEEvent['type'], data: unknown): void => {
-      if (active.phase === 'terminal' || activeRuns.get(session.id) !== active) {
+      if (
+        active.phase === 'terminating'
+        || active.phase === 'terminal'
+        || activeRuns.get(session.id) !== active
+      ) {
         return;
       }
       emit(session.id, type, data);
@@ -709,6 +717,8 @@ export interface DefaultAgentRunOptions {
   readonly policy: RuntimePolicy;
   readonly credentialStore: CredentialStore;
   readonly byokAdapterFactory?: ByokAdapterFactory;
+  readonly workspaceManager?: WorkspaceManager;
+  readonly now?: () => Date;
 }
 
 const createTransientDeepSeekResource: ByokAdapterFactory = (apiKey) => {
@@ -736,6 +746,30 @@ const createTransientDeepSeekResource: ByokAdapterFactory = (apiKey) => {
 export const createDefaultAgentRun = (
   options: DefaultAgentRunOptions,
 ): AgentRun => ({ session, task, mode, emit, apiKey }) => {
+  if (mode === 'demo') {
+    if (!options.workspaceManager) {
+      throw new Error('Public demo workspace manager is unavailable');
+    }
+    const runner = createPublicDemoRunner({
+      emit,
+      workspaceManager: options.workspaceManager,
+      now: options.now,
+      emitComplete: false,
+    });
+    const abortController = new AbortController();
+    const completion = runner.run(session, abortController.signal).then((result) => ({
+      ...result,
+      completionData: { stage: 'demo_complete' },
+    }));
+    return {
+      completion,
+      abort: async () => {
+        abortController.abort();
+        await completion.catch(() => undefined);
+      },
+      release: () => { abortController.abort(); },
+    };
+  }
   const tools = createPolicyToolRegistry(options.policy, session.workspace);
   const governance = createGovernanceService();
   const feedback = createFeedbackLoop(

@@ -1,5 +1,5 @@
 import { FeedbackResult, FeedbackState } from '../types.js';
-import { TestRunner } from './test-runner.js';
+import type { TestRunner } from './test-runner.js';
 import { ResultParser } from './result-parser.js';
 import { FailureClassifier } from './failure-classifier.js';
 import { FixSuggestionBuilder } from './fix-suggestion.js';

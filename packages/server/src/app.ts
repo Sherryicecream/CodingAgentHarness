@@ -20,6 +20,7 @@ import {
 import { createSessionRegistry } from './session/session-registry.js';
 import type { SessionRegistry } from './session/session-registry.js';
 import { createWorkspaceManager } from './session/workspace-manager.js';
+import type { WorkspaceManager } from './session/workspace-manager.js';
 import { createSSEManager } from './sse/sse-manager.js';
 import type { SSEManager } from './sse/sse-manager.js';
 
@@ -57,6 +58,7 @@ export interface AppOptions {
   sessionRateLimit?: RunRateLimitOptions;
   trustProxy?: TrustProxyConfiguration;
   sessionRegistry?: SessionRegistry;
+  workspaceManager?: WorkspaceManager;
   sweepIntervalMs?: number;
   intervalScheduler?: IntervalScheduler;
   sseManager?: SSEManager;
@@ -141,8 +143,9 @@ export const createApp = (options: AppOptions = {}): HarnessApp => {
   const sessionStore = policy.mode === 'local'
     ? options.sessionStore ?? createSessionStore('.harness-sessions')
     : undefined;
+  const workspaceManager = options.workspaceManager ?? createWorkspaceManager({ root: workspaceRoot });
   const sessionRegistry = options.sessionRegistry ?? createSessionRegistry({
-    workspaceManager: createWorkspaceManager({ root: workspaceRoot }),
+    workspaceManager,
     now: options.now,
     idGenerator: options.idGenerator,
     maxConcurrent: options.maxConcurrent
@@ -162,6 +165,8 @@ export const createApp = (options: AppOptions = {}): HarnessApp => {
       policy,
       credentialStore,
       byokAdapterFactory: options.byokAdapterFactory,
+      workspaceManager,
+      now: options.now,
     }),
     now: options.now,
     fetchImpl: options.fetchImpl,
