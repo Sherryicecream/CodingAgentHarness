@@ -32,10 +32,14 @@ export interface SessionRegistryOptions {
   readonly maxConcurrent?: number;
 }
 
+export interface SweepExpiredOptions {
+  readonly skipIds?: ReadonlySet<string>;
+}
+
 export interface SessionRegistry {
   issue(clientKey: string): Promise<PublicSession>;
   getAuthorized(id: string, clientKey: string): PublicSession | null;
-  sweepExpired(): Promise<number>;
+  sweepExpired(options?: SweepExpiredOptions): Promise<number>;
   start(id: string, clientKey: string): PublicSession;
   complete(id: string, clientKey: string): PublicSession;
   fail(id: string, clientKey: string): PublicSession;
@@ -173,13 +177,13 @@ export const createSessionRegistry = (
       return toPublicSession(record);
     },
 
-    async sweepExpired() {
+    async sweepExpired(sweepOptions = {}) {
       const timestamp = now().getTime();
       expireDueSessions(timestamp);
       let removed = 0;
       const failures: unknown[] = [];
       for (const [id, record] of records) {
-        if (timestamp < record.expiresAt) {
+        if (timestamp < record.expiresAt || sweepOptions.skipIds?.has(id)) {
           continue;
         }
         try {

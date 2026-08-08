@@ -78,8 +78,13 @@ export interface AgentRouterDependencies {
   readonly sessionStore?: SessionStore;
 }
 
+export interface ActiveExpiryResult {
+  readonly protectedSessionIds: ReadonlySet<string>;
+  readonly failureCount: number;
+}
+
 export type AgentRouter = Router & {
-  expireActiveSessions(): Promise<void>;
+  expireActiveSessions(): Promise<ActiveExpiryResult>;
 };
 
 const normalizeClientKey = (req: Request): string => {
@@ -135,7 +140,8 @@ export const createAgentRouter = (
     readonly session: PublicSession;
     readonly clientKey: string;
     readonly handle: AgentRunHandle;
-    phase: 'running' | 'blocked' | 'terminal';
+    phase: 'running' | 'blocked' | 'continuing' | 'terminating' | 'terminal';
+    termination?: Promise<void>;
   }
   const activeRuns = new Map<string, ActiveRun>();
   const emit = (sessionId: string, type: SSEEvent['type'], data: unknown): void => {
@@ -195,12 +201,62 @@ export const createAgentRouter = (
       cleanupRun(active);
     }
   };
+  const terminateRun = (
+    active: ActiveRun,
+    rejectedByUser: boolean,
+  ): Promise<void> | null => {
+    if (active.termination) {
+      return active.termination;
+    }
+    if (active.phase !== 'running' && active.phase !== 'blocked') {
+      return null;
+    }
+    const previousPhase = active.phase;
+    active.phase = 'terminating';
+    const operation = (async (): Promise<void> => {
+      await Promise.resolve();
+      try {
+        if (!active.handle.abort) {
+          throw new Error('Active run has no abort handle');
+        }
+        await active.handle.abort();
+        if (rejectedByUser) {
+          if (active.handle.approve) {
+            try {
+              active.handle.approve(false);
+            } catch {
+              logger.warn('SESSION_APPROVAL_FAILED');
+            }
+          }
+          try {
+            emit(active.session.id, 'guardrail', {
+              approved: false,
+              sessionId: active.session.id,
+            });
+          } catch {
+            logger.warn('SESSION_TERMINAL_EVENT_FAILED');
+          }
+        }
+        await finalizeRun(active, 'failed');
+      } catch (error) {
+        if (activeRuns.get(active.session.id) === active && active.phase === 'terminating') {
+          active.phase = previousPhase;
+        }
+        logger.warn('SESSION_ABORT_FAILED');
+        throw error;
+      } finally {
+        active.termination = undefined;
+      }
+    })();
+    active.termination = operation;
+    return operation;
+  };
   const observeCompletion = (
     active: ActiveRun,
     completion: Promise<AgentRunOutput | void>,
   ): void => {
     void completion.then(async (result) => {
-      if (active.phase === 'terminal') {
+      if (active.phase !== 'running') {
         return;
       }
       if (result?.status === 'blocked') {
@@ -213,6 +269,9 @@ export const createAgentRouter = (
       }
       await finalizeRun(active, 'completed', result);
     }, async () => {
+      if (active.phase !== 'running') {
+        return;
+      }
       await finalizeRun(active, 'failed');
     }).catch(() => logger.warn('SESSION_FINALIZATION_FAILED'));
   };
@@ -397,31 +456,34 @@ export const createAgentRouter = (
       return;
     }
     if (!approved) {
+      const termination = terminateRun(active, true);
+      if (!termination) {
+        res.status(409).json({ error: 'SESSION_NOT_BLOCKED' });
+        return;
+      }
       try {
-        await active.handle.abort?.();
+        await termination;
       } catch {
-        logger.warn('SESSION_ABORT_FAILED');
+        res.status(500).json({ error: 'SESSION_REJECTION_FAILED' });
+        return;
       }
-      if (active.handle.approve) {
-        try {
-          active.handle.approve(false);
-        } catch {
-          logger.warn('SESSION_APPROVAL_FAILED');
-        }
-      }
-      emit(sessionId, 'guardrail', { approved: false, sessionId });
-      await finalizeRun(active, 'failed');
     } else {
       if (!active.handle.continueAfterApproval) {
         res.status(409).json({ error: 'APPROVAL_CONTINUATION_UNAVAILABLE' });
         return;
       }
+      active.phase = 'continuing';
       try {
         const continuation = active.handle.continueAfterApproval();
+        try {
+          emit(sessionId, 'guardrail', { approved: true, sessionId });
+        } catch {
+          logger.warn('SESSION_TERMINAL_EVENT_FAILED');
+        }
         active.phase = 'running';
-        emit(sessionId, 'guardrail', { approved: true, sessionId });
         observeCompletion(active, continuation);
       } catch {
+        active.phase = 'blocked';
         logger.warn('SESSION_APPROVAL_FAILED');
         res.status(500).json({ error: 'APPROVAL_FAILED' });
         return;
@@ -433,20 +495,27 @@ export const createAgentRouter = (
   router.post('/approve', handleApproval(true));
   router.post('/reject', handleApproval(false));
 
-  router.expireActiveSessions = async (): Promise<void> => {
+  router.expireActiveSessions = async (): Promise<ActiveExpiryResult> => {
     const timestamp = now().getTime();
     const expired = [...activeRuns.values()].filter((active) => (
       active.session.expiresAt.getTime() <= timestamp
     ));
+    const protectedSessionIds = new Set<string>();
+    let failureCount = 0;
     for (const active of expired) {
-      try {
-        await active.handle.abort?.();
-      } catch (error) {
-        logger.warn('SESSION_ABORT_FAILED');
-        throw error;
+      const termination = terminateRun(active, false);
+      if (!termination || active.phase !== 'terminating') {
+        protectedSessionIds.add(active.session.id);
+        continue;
       }
-      await finalizeRun(active, 'failed');
+      try {
+        await termination;
+      } catch {
+        failureCount += 1;
+        protectedSessionIds.add(active.session.id);
+      }
     }
+    return { protectedSessionIds, failureCount };
   };
 
   return router;

@@ -185,8 +185,18 @@ export const createApp = (options: AppOptions = {}): HarnessApp => {
     }
     const operation = (async (): Promise<void> => {
       try {
-        await agentRouter.expireActiveSessions();
-        await sessionRegistry.sweepExpired();
+        const activeExpiry = await agentRouter.expireActiveSessions();
+        let registryFailed = false;
+        try {
+          await sessionRegistry.sweepExpired({
+            skipIds: activeExpiry.protectedSessionIds,
+          });
+        } catch {
+          registryFailed = true;
+        }
+        if (activeExpiry.failureCount > 0 || registryFailed) {
+          logger.warn('SESSION_SWEEP_FAILED');
+        }
       } catch {
         logger.warn('SESSION_SWEEP_FAILED');
       }

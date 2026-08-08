@@ -522,6 +522,60 @@ describe('AgentLoop', () => {
       expect(llm.remainingCount).toBe(0);
     });
 
+    it('preserves exact progress across two approvals in one multi-action response', async () => {
+      const executions: string[] = [];
+      const safeTool = makeWriteFileTool();
+      const dangerousTool = makeDangerousTool();
+      const tools = createToolRegistry();
+      tools.register({
+        ...safeTool,
+        async execute(params) {
+          executions.push(String(params.path));
+          return safeTool.execute(params);
+        },
+      });
+      tools.register({
+        ...dangerousTool,
+        async execute(params) {
+          executions.push(String(params.command));
+          return dangerousTool.execute(params);
+        },
+      });
+      const loop = createAgentLoop(buildDeps({
+        llm: new MockLLMAdapter([
+          makeResponse('Run the ordered actions.', [
+            makeToolCall('safe', 'write_file', { path: 'safe.txt', content: 'safe' }),
+            makeToolCall('first-risk', 'execute_shell', { command: 'rm -rf first-owned-target' }),
+            makeToolCall('second-risk', 'execute_shell', { command: 'rm -rf second-owned-target' }),
+          ]),
+          makeResponse('All approved actions completed. TASK_COMPLETE'),
+        ]),
+        tools,
+        governance: createGovernanceService({ blockedCommands: [] }),
+        feedback: makeMockFeedbackLoop(),
+        contextBuilder: createContextBuilder(),
+        stopCondition: createStopCondition(),
+      }));
+
+      const firstBlock = await loop.run('Run three ordered actions', '/tmp/test');
+      const secondBlock = await loop.continueAfterApproval(true);
+      const completed = await loop.continueAfterApproval(true);
+
+      expect(firstBlock.status).toBe('blocked');
+      expect(secondBlock.status).toBe('blocked');
+      expect(completed.status).toBe('completed');
+      expect(executions).toEqual([
+        'safe.txt',
+        'rm -rf first-owned-target',
+        'rm -rf second-owned-target',
+      ]);
+      expect(completed.session.toolCalls.map((call) => call.guardrailCheck)).toEqual([
+        'passed',
+        'approved_by_user',
+        'approved_by_user',
+      ]);
+    });
+
     it('should throw when handleApproval called without pending block', () => {
       const tools = createToolRegistry();
       const governance = createGovernanceService();

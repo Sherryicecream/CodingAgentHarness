@@ -261,6 +261,186 @@ describe('public agent request boundaries', () => {
     expect(closeCalls).toBe(1);
   });
 
+  it('serializes a deferred rejection against a concurrent approval', async () => {
+    let resolveBlocked!: (value: { status: string }) => void;
+    const completion = new Promise<{ status: string }>((resolve) => {
+      resolveBlocked = resolve;
+    });
+    let markAbortStarted!: () => void;
+    const abortStarted = new Promise<void>((resolve) => { markAbortStarted = resolve; });
+    let releaseAbort!: () => void;
+    const abortGate = new Promise<void>((resolve) => { releaseAbort = resolve; });
+    let abortCalls = 0;
+    let continuationCalls = 0;
+    let closeCalls = 0;
+    const events: Array<{ type: string; data: unknown }> = [];
+    const app = await createPublicApp({
+      idGenerator: () => 'reject-approve-race',
+      agentRun: () => ({
+        completion,
+        abort: async () => {
+          abortCalls += 1;
+          markAbortStarted();
+          await abortGate;
+        },
+        continueAfterApproval: () => {
+          continuationCalls += 1;
+          return pendingRun();
+        },
+      }),
+      sseManager: {
+        createConnection: () => undefined,
+        push: (_sessionId, event) => { events.push(event); },
+        close: () => { closeCalls += 1; },
+      },
+    });
+    await request(app).post('/api/agent/sessions').send({});
+    await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'reject-approve-race', task: 'work', mode: 'demo' });
+    resolveBlocked({ status: 'blocked' });
+    await nextTurn();
+
+    const rejecting = request(app)
+      .post('/api/agent/reject')
+      .send({ sessionId: 'reject-approve-race' })
+      .then((response) => response);
+    await abortStarted;
+    const approved = await request(app)
+      .post('/api/agent/approve')
+      .send({ sessionId: 'reject-approve-race' });
+    releaseAbort();
+    const rejected = await rejecting;
+
+    const guardrailDecisions = events
+      .filter((event) => event.type === 'guardrail')
+      .map((event) => (event.data as { approved?: boolean }).approved);
+    expect(rejected.status).toBe(200);
+    expect(approved.status).toBe(409);
+    expect(abortCalls).toBe(1);
+    expect(continuationCalls).toBe(0);
+    expect(guardrailDecisions).toEqual([false]);
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(1);
+    expect(closeCalls).toBe(1);
+  });
+
+  it('serializes two deferred rejection requests', async () => {
+    let resolveBlocked!: (value: { status: string }) => void;
+    const completion = new Promise<{ status: string }>((resolve) => {
+      resolveBlocked = resolve;
+    });
+    let markAbortStarted!: () => void;
+    const abortStarted = new Promise<void>((resolve) => { markAbortStarted = resolve; });
+    let releaseAbort!: () => void;
+    const abortGate = new Promise<void>((resolve) => { releaseAbort = resolve; });
+    let abortCalls = 0;
+    let closeCalls = 0;
+    const events: Array<{ type: string; data: unknown }> = [];
+    const app = await createPublicApp({
+      idGenerator: () => 'double-reject-race',
+      agentRun: () => ({
+        completion,
+        abort: async () => {
+          abortCalls += 1;
+          markAbortStarted();
+          await abortGate;
+        },
+      }),
+      sseManager: {
+        createConnection: () => undefined,
+        push: (_sessionId, event) => { events.push(event); },
+        close: () => { closeCalls += 1; },
+      },
+    });
+    await request(app).post('/api/agent/sessions').send({});
+    await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'double-reject-race', task: 'work', mode: 'demo' });
+    resolveBlocked({ status: 'blocked' });
+    await nextTurn();
+
+    const firstRequest = request(app)
+      .post('/api/agent/reject')
+      .send({ sessionId: 'double-reject-race' })
+      .then((response) => response);
+    await abortStarted;
+    const secondRequest = request(app)
+      .post('/api/agent/reject')
+      .send({ sessionId: 'double-reject-race' })
+      .then((response) => response);
+    const second = await secondRequest;
+    releaseAbort();
+    const first = await firstRequest;
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(409);
+    expect(abortCalls).toBe(1);
+    expect(events.filter((event) => event.type === 'guardrail')).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(1);
+    expect(closeCalls).toBe(1);
+  });
+
+  it('lets a claimed rejection win over a concurrent expiry sweep', async () => {
+    let currentTime = new Date('2026-08-08T00:00:00.000Z');
+    const root = await createWorkspaceRoot();
+    let resolveBlocked!: (value: { status: string }) => void;
+    const completion = new Promise<{ status: string }>((resolve) => {
+      resolveBlocked = resolve;
+    });
+    let markAbortStarted!: () => void;
+    const abortStarted = new Promise<void>((resolve) => { markAbortStarted = resolve; });
+    let releaseAbort!: () => void;
+    const abortGate = new Promise<void>((resolve) => { releaseAbort = resolve; });
+    let abortCalls = 0;
+    let closeCalls = 0;
+    const events: Array<{ type: string; data: unknown }> = [];
+    const app = createApp({
+      mode: 'public',
+      workspaceRoot: root,
+      idGenerator: () => 'reject-sweep-race',
+      now: () => new Date(currentTime),
+      agentRun: () => ({
+        completion,
+        abort: async () => {
+          abortCalls += 1;
+          markAbortStarted();
+          await abortGate;
+        },
+      }),
+      sseManager: {
+        createConnection: () => undefined,
+        push: (_sessionId, event) => { events.push(event); },
+        close: () => { closeCalls += 1; },
+      },
+    });
+    createdApps.push(app);
+    await request(app).post('/api/agent/sessions').send({});
+    await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'reject-sweep-race', task: 'work', mode: 'demo' });
+    resolveBlocked({ status: 'blocked' });
+    await nextTurn();
+
+    const rejecting = request(app)
+      .post('/api/agent/reject')
+      .send({ sessionId: 'reject-sweep-race' })
+      .then((response) => response);
+    await abortStarted;
+    currentTime = new Date('2026-08-08T01:00:00.000Z');
+    const sweep = app.sweepSessions();
+    await nextTurn();
+    releaseAbort();
+    const [rejected] = await Promise.all([rejecting, sweep]);
+
+    expect(rejected.status).toBe(200);
+    expect(abortCalls).toBe(1);
+    expect(events.filter((event) => event.type === 'guardrail')).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(1);
+    expect(closeCalls).toBe(1);
+    await expect(realpath(join(root, 'reject-sweep-race')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('continues an approved blocked run to terminal cleanup and releases concurrency', async () => {
     let resolveBlocked!: (value: { status: string }) => void;
     const blockedCompletion = new Promise<{ status: string }>((resolve) => {
@@ -468,6 +648,10 @@ describe('public agent request boundaries', () => {
     let abortCalls = 0;
     let abortSettled = false;
     let sweepObservedAbortSettled = false;
+    let rejectCompletion!: (error: Error) => void;
+    const completion = new Promise<never>((_resolve, reject) => {
+      rejectCompletion = reject;
+    });
     let releaseAbort!: () => void;
     const abortGate = new Promise<void>((resolve) => { releaseAbort = resolve; });
     let closeCalls = 0;
@@ -490,8 +674,8 @@ describe('public agent request boundaries', () => {
       workspaceRoot: root,
       sessionRegistry,
       now: () => new Date(currentTime),
-      agentRun: () => ({
-        completion: pendingRun(),
+      agentRun: ({ session }) => ({
+        completion: session.id === 'expiring-active' ? completion : pendingRun(),
         abort: async () => {
           abortCalls += 1;
           await abortGate;
@@ -521,6 +705,9 @@ describe('public agent request boundaries', () => {
     currentTime = new Date('2026-08-08T01:00:00.000Z');
     const sweep = Promise.resolve(tick!());
     await nextTurn();
+    rejectCompletion(new Error('completion lost the expiry race'));
+    await nextTurn();
+    const closeCallsBeforeAbortSettled = closeCalls;
     let workspaceExistedUntilAbortSettled = true;
     try {
       await realpath(workspace);
@@ -531,6 +718,7 @@ describe('public agent request boundaries', () => {
     await sweep;
 
     expect(workspaceExistedUntilAbortSettled).toBe(true);
+    expect(closeCallsBeforeAbortSettled).toBe(0);
     await expect(realpath(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
     const expired = await request(app)
       .post('/api/agent/run')
@@ -567,7 +755,7 @@ describe('public agent request boundaries', () => {
       },
       agentRun: () => ({
         completion: pendingRun(),
-        abort: async () => {
+        abort: () => {
           abortAttempts += 1;
           if (abortAttempts === 1) {
             throw new Error('injected abort failure');
@@ -599,6 +787,55 @@ describe('public agent request boundaries', () => {
     expect(warnings).toContain('SESSION_ABORT_FAILED');
     expect(warnings).toContain('SESSION_SWEEP_FAILED');
     await expect(realpath(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not let one failed active abort starve other expired cleanup', async () => {
+    let currentTime = new Date('2026-08-08T00:00:00.000Z');
+    const root = await createWorkspaceRoot();
+    const ids = ['stuck-active', 'clean-active', 'inactive-expired'];
+    const abortAttempts = new Map<string, number>();
+    const warnings: unknown[] = [];
+    const app = createApp({
+      mode: 'public',
+      workspaceRoot: root,
+      idGenerator: () => ids.shift()!,
+      now: () => new Date(currentTime),
+      logger: {
+        error: () => undefined,
+        info: () => undefined,
+        warn: (message) => { warnings.push(message); },
+      },
+      agentRun: ({ session }) => ({
+        completion: pendingRun(),
+        abort: async () => {
+          abortAttempts.set(session.id, (abortAttempts.get(session.id) ?? 0) + 1);
+          if (session.id === 'stuck-active') {
+            throw new Error('permanent abort failure');
+          }
+        },
+      }),
+    });
+    createdApps.push(app);
+    await request(app).post('/api/agent/sessions').send({});
+    await request(app).post('/api/agent/sessions').send({});
+    await request(app).post('/api/agent/sessions').send({});
+    await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'stuck-active', task: 'stuck', mode: 'demo' });
+    await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'clean-active', task: 'clean', mode: 'demo' });
+
+    currentTime = new Date('2026-08-08T01:00:00.000Z');
+    await app.sweepSessions();
+
+    expect(await realpath(join(root, 'stuck-active'))).toBe(join(root, 'stuck-active'));
+    await expect(realpath(join(root, 'clean-active'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(realpath(join(root, 'inactive-expired'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(abortAttempts.get('stuck-active')).toBe(1);
+    expect(abortAttempts.get('clean-active')).toBe(1);
+    expect(warnings).toContain('SESSION_ABORT_FAILED');
+    expect(warnings).toContain('SESSION_SWEEP_FAILED');
   });
 
   it('reports a failed sweep, retries on the next tick, and closes its timer', async () => {
