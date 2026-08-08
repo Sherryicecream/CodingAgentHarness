@@ -8,6 +8,7 @@ import { createApp, type AppOptions, type HarnessApp } from '../../src/app.js';
 import type { CredentialStore } from '../../src/credential-store.js';
 import { createDefaultAgentRun } from '../../src/routes/agent.js';
 import { isSecureByokRequest } from '../../src/security/request-security.js';
+import { redactSecrets } from '../../src/security/secret-redactor.js';
 import { PUBLIC_RUNTIME_POLICY } from '../../src/security/runtime-policy.js';
 import type { SSEEvent, SSEManager } from '../../src/sse/sse-manager.js';
 
@@ -62,14 +63,19 @@ const settleWithin = async <T>(
 
 const createTrackingSSEManager = () => {
   const events: SSEEvent[] = [];
-  const secretSessions = new Set<string>();
+  const secretSessions = new Map<string, readonly string[]>();
   const closedSessions = new Set<string>();
   const manager: SSEManager = {
     createConnection: () => undefined,
     disconnect: () => undefined,
-    setSecrets: (sessionId) => { secretSessions.add(sessionId); },
+    setSecrets: (sessionId, secrets) => { secretSessions.set(sessionId, [...secrets]); },
     clearSecrets: (sessionId) => { secretSessions.delete(sessionId); },
-    push: (_sessionId, event) => { events.push(event); },
+    push: (sessionId, event) => {
+      events.push({
+        ...event,
+        data: redactSecrets(event.data, secretSessions.get(sessionId) ?? []),
+      });
+    },
     close: (sessionId) => {
       secretSessions.delete(sessionId);
       closedSessions.add(sessionId);
@@ -85,6 +91,7 @@ afterEach(async () => {
     force: true,
   })));
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 describe('BYOK request security', () => {
@@ -473,5 +480,184 @@ describe('BYOK request security', () => {
     await expect(import('node:fs/promises').then(({ realpath }) => (
       realpath(join(root, 'byok-session'))
     ))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('forwards AgentLoop abort through the production BYOK wrapper and clears request headers', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    let capturedHeaders: HeadersInit | undefined;
+    let resolveFetch!: (response: Response) => void;
+    const fetchResult = new Promise<Response>((resolve, reject) => {
+      resolveFetch = resolve;
+      vi.stubGlobal('fetch', ((_url: string | URL, init?: RequestInit) => {
+        capturedSignal = init?.signal ?? undefined;
+        capturedHeaders = init?.headers;
+        capturedSignal?.addEventListener('abort', () => {
+          reject(new DOMException('aborted', 'AbortError'));
+        }, { once: true });
+        return fetchResult;
+      }) as typeof fetch);
+    });
+    const run = createDefaultAgentRun({
+      policy: PUBLIC_RUNTIME_POLICY,
+      credentialStore: emptyCredentialStore,
+    });
+    const started = run({
+      session: {
+        id: 'default-wrapper',
+        clientKey: 'loopback',
+        workspace: process.cwd(),
+        status: 'running',
+        createdAt: new Date('2026-08-08T00:00:00.000Z'),
+        expiresAt: new Date('2026-08-08T01:00:00.000Z'),
+      },
+      task: 'work',
+      mode: 'byok',
+      apiKey: SENTINEL,
+      emit: () => undefined,
+    });
+    const handle = 'completion' in started ? started : { completion: started };
+    await waitForAsyncCompletion();
+
+    await handle.abort?.();
+    const outcome = await settleWithin(handle.completion.catch(() => undefined));
+    if (outcome === 'timeout') {
+      resolveFetch(new Response(JSON.stringify({
+        choices: [{ message: { content: 'TASK_COMPLETE' } }],
+      }), { status: 200 }));
+      await handle.completion.catch(() => undefined);
+    }
+    handle.release?.();
+
+    expect(outcome).toBe('settled');
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(JSON.stringify(capturedHeaders)).not.toContain(SENTINEL);
+  });
+
+  it('cleans terminal BYOK state before a pending history save settles', async () => {
+    vi.stubEnv('NODE_ENV', 'test');
+    let currentTime = new Date('2026-08-08T00:00:00.000Z');
+    let rejectSave!: (error: Error) => void;
+    const pendingSave = new Promise<void>((_resolve, reject) => { rejectSave = reject; });
+    let savedSnapshot = '';
+    let savedCreatedAt = '';
+    let saveCalls = 0;
+    let released = false;
+    const warnings: unknown[] = [];
+    const sse = createTrackingSSEManager();
+    const ids = ['save-pending', 'replacement-after-save'];
+    const app = await createTestApp({
+      mode: 'local',
+      now: () => new Date(currentTime),
+      idGenerator: () => ids.shift()!,
+      maxConcurrent: 1,
+      historySaveTimeoutMs: 10,
+      sessionStore: {
+        save: (session) => {
+          saveCalls += 1;
+          if (saveCalls === 1) {
+            savedCreatedAt = session.createdAt.toISOString();
+            savedSnapshot = JSON.stringify(session);
+            return pendingSave;
+          }
+          return Promise.resolve();
+        },
+        list: async () => [],
+        load: async () => null,
+        delete: async () => undefined,
+      },
+      byokAdapterFactory: () => ({
+        adapter: {
+          sendMessage: async () => ({
+            content: `TASK_COMPLETE ${SENTINEL}`,
+            toolCalls: [],
+          }),
+        },
+        release: () => { released = true; },
+      }),
+      sseManager: sse.manager,
+      logger: {
+        error: () => undefined,
+        info: () => undefined,
+        warn: (message) => { warnings.push(message); },
+      },
+    });
+    const root = temporaryPaths.at(-1)!;
+    await request(app).post('/api/agent/sessions').send({});
+    await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'save-pending', task: 'work', mode: 'byok', apiKey: SENTINEL });
+    await waitForAsyncCompletion();
+    await waitForAsyncCompletion();
+
+    const releasedBeforeSaveSettled = released;
+    const secretsBeforeSaveSettled = sse.secretSessions.size;
+    const issued = await request(app).post('/api/agent/sessions').send({});
+    const replacement = await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'replacement-after-save', task: 'replacement', mode: 'demo' });
+    currentTime = new Date('2026-08-08T01:00:00.000Z');
+    await app.sweepSessions();
+    let workspaceRemovedBeforeSaveSettled = false;
+    try {
+      await import('node:fs/promises').then(({ realpath }) => (
+        realpath(join(root, 'save-pending'))
+      ));
+    } catch {
+      workspaceRemovedBeforeSaveSettled = true;
+    }
+
+    const eventCountBeforeLateReject = sse.events.length;
+    rejectSave(new Error(`late history rejection ${SENTINEL}`));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitForAsyncCompletion();
+
+    expect(releasedBeforeSaveSettled).toBe(true);
+    expect(secretsBeforeSaveSettled).toBe(0);
+    expect(issued.status).toBe(201);
+    expect(replacement.status).toBe(202);
+    expect(workspaceRemovedBeforeSaveSettled).toBe(true);
+    expect(savedCreatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(savedSnapshot).toContain('[REDACTED]');
+    expect(savedSnapshot).not.toContain(SENTINEL);
+    expect(JSON.stringify({ warnings, events: sse.events })).not.toContain(SENTINEL);
+    expect(sse.events.slice(eventCountBeforeLateReject)).toEqual([]);
+  });
+
+  it('drops tool events emitted after forced terminal cleanup', async () => {
+    vi.stubEnv('NODE_ENV', 'test');
+    let currentTime = new Date('2026-08-08T00:00:00.000Z');
+    let lateEmit!: (type: SSEEvent['type'], data: unknown) => void;
+    let released = false;
+    const sse = createTrackingSSEManager();
+    const app = await createTestApp({
+      now: () => new Date(currentTime),
+      agentRun: ({ emit }) => {
+        lateEmit = emit;
+        return {
+          completion: new Promise<never>(() => undefined),
+          abort: () => undefined,
+          release: () => { released = true; },
+        };
+      },
+      sseManager: sse.manager,
+    });
+    await request(app).post('/api/agent/sessions').send({});
+    await request(app)
+      .post('/api/agent/run')
+      .send({ sessionId: 'byok-session', task: 'work', mode: 'byok', apiKey: SENTINEL });
+
+    currentTime = new Date('2026-08-08T01:00:00.000Z');
+    await app.sweepSessions();
+    const eventCountAtCleanup = sse.events.length;
+    lateEmit('tool_call', {
+      status: 'done',
+      result: { success: true, output: SENTINEL },
+    });
+    await waitForAsyncCompletion();
+
+    expect(released).toBe(true);
+    expect(sse.secretSessions.size).toBe(0);
+    expect(sse.events).toHaveLength(eventCountAtCleanup);
+    expect(JSON.stringify(sse.events)).not.toContain(SENTINEL);
   });
 });

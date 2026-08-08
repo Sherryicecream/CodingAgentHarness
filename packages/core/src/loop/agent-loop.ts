@@ -107,6 +107,9 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
     } catch (error: any) {
       result = { success: false, output: '', error: error.message };
     }
+    if (aborted) {
+      return;
+    }
     deps.onEvent?.('tool_call', {
       name: toolCall.name,
       arguments: toolCall.arguments,

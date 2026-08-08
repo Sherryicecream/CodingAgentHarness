@@ -88,6 +88,7 @@ export interface AgentRouterDependencies {
   readonly logger?: Pick<Console, 'warn'>;
   readonly sessionStore?: SessionStore;
   readonly abortTimeoutMs?: number;
+  readonly historySaveTimeoutMs?: number;
 }
 
 export interface ActiveExpiryResult {
@@ -159,6 +160,7 @@ const safeProviderStatus = (error: unknown): number | undefined => {
 };
 
 const DEFAULT_ABORT_TIMEOUT_MS = 5_000;
+const DEFAULT_HISTORY_SAVE_TIMEOUT_MS = 5_000;
 
 const abortWithTimeout = async (
   abort: () => void | Promise<void>,
@@ -193,8 +195,13 @@ export const createAgentRouter = (
   const now = dependencies.now ?? (() => new Date());
   const logger = dependencies.logger ?? console;
   const abortTimeoutMs = dependencies.abortTimeoutMs ?? DEFAULT_ABORT_TIMEOUT_MS;
+  const historySaveTimeoutMs = dependencies.historySaveTimeoutMs
+    ?? DEFAULT_HISTORY_SAVE_TIMEOUT_MS;
   if (!Number.isSafeInteger(abortTimeoutMs) || abortTimeoutMs <= 0) {
     throw new Error('abortTimeoutMs must be a positive integer');
+  }
+  if (!Number.isSafeInteger(historySaveTimeoutMs) || historySaveTimeoutMs <= 0) {
+    throw new Error('historySaveTimeoutMs must be a positive integer');
   }
   type CompletionOutcome =
     | { readonly kind: 'resolved'; readonly result: AgentRunOutput | void }
@@ -202,7 +209,7 @@ export const createAgentRouter = (
   interface ActiveRun {
     readonly session: PublicSession;
     readonly clientKey: string;
-    readonly handle: AgentRunHandle;
+    handle?: AgentRunHandle;
     readonly mode: RuntimeExperience;
     phase: 'running' | 'blocked' | 'continuing' | 'terminating' | 'terminal';
     termination?: Promise<void>;
@@ -213,12 +220,40 @@ export const createAgentRouter = (
   const emit = (sessionId: string, type: SSEEvent['type'], data: unknown): void => {
     dependencies.sseManager.push(sessionId, { type, data, timestamp: now() });
   };
+  const scheduleHistorySave = (session: Session): void => {
+    if (!dependencies.sessionStore) {
+      return;
+    }
+    let snapshot: Session;
+    try {
+      snapshot = sanitizeSessionSecrets(session, []);
+    } catch {
+      logger.warn('SESSION_HISTORY_SNAPSHOT_FAILED');
+      return;
+    }
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      logger.warn('SESSION_HISTORY_SAVE_TIMEOUT');
+    }, historySaveTimeoutMs);
+    timer.unref?.();
+    void Promise.resolve()
+      .then(() => dependencies.sessionStore!.save(snapshot))
+      .then(() => {
+        clearTimeout(timer);
+      }, () => {
+        clearTimeout(timer);
+        if (!timedOut) {
+          logger.warn('SESSION_HISTORY_SAVE_FAILED');
+        }
+      });
+  };
   const cleanupRun = (active: ActiveRun): void => {
     if (activeRuns.get(active.session.id) === active) {
       activeRuns.delete(active.session.id);
     }
     try {
-      active.handle.release?.();
+      active.handle?.release?.();
     } catch {
       logger.warn('SESSION_RESOURCE_RELEASE_FAILED');
     } finally {
@@ -242,11 +277,7 @@ export const createAgentRouter = (
     try {
       const outcome = requestedOutcome;
       if (outcome === 'completed' && dependencies.sessionStore && result?.session) {
-        try {
-          await dependencies.sessionStore.save(result.session);
-        } catch {
-          logger.warn('SESSION_HISTORY_SAVE_FAILED');
-        }
+        scheduleHistorySave(result.session);
       }
       try {
         if (outcome === 'completed') {
@@ -317,11 +348,12 @@ export const createAgentRouter = (
     const operation = (async (): Promise<void> => {
       await Promise.resolve();
       try {
-        if (!active.handle.abort) {
+        const handle = active.handle;
+        if (!handle?.abort) {
           throw new Error('Active run has no abort handle');
         }
         const abortOutcome = await abortWithTimeout(
-          () => active.handle.abort!(),
+          () => handle.abort!(),
           abortTimeoutMs,
         );
         if (abortOutcome === 'timed_out') {
@@ -330,9 +362,9 @@ export const createAgentRouter = (
           return;
         }
         if (rejectedByUser) {
-          if (active.handle.approve) {
+          if (handle.approve) {
             try {
-              active.handle.approve(false);
+              handle.approve(false);
             } catch {
               logger.warn('SESSION_APPROVAL_FAILED');
             }
@@ -486,7 +518,19 @@ export const createAgentRouter = (
       return;
     }
 
-    let handle: AgentRunHandle;
+    const active: ActiveRun = {
+      session,
+      clientKey,
+      mode: input.mode,
+      phase: 'running',
+    };
+    activeRuns.set(session.id, active);
+    const emitWhileActive = (type: SSEEvent['type'], data: unknown): void => {
+      if (active.phase === 'terminal' || activeRuns.get(session.id) !== active) {
+        return;
+      }
+      emit(session.id, type, data);
+    };
     try {
       if (input.mode === 'byok') {
         if (!dependencies.sseManager.setSecrets || !dependencies.sseManager.disconnect) {
@@ -494,35 +538,27 @@ export const createAgentRouter = (
         }
         dependencies.sseManager.setSecrets(session.id, [input.apiKey!]);
       }
-      handle = toRunHandle(dependencies.agentRun({
+      active.handle = toRunHandle(dependencies.agentRun({
         session,
         task: input.task,
         mode: input.mode,
         apiKey: input.apiKey,
-        emit: (type, data) => emit(session.id, type, data),
+        emit: emitWhileActive,
       }));
     } catch {
-      dependencies.sessionRegistry.fail(session.id, clientKey);
+      active.phase = 'terminal';
       try {
-        dependencies.sseManager.clearSecrets?.(session.id);
-        dependencies.sseManager.close(session.id);
+        dependencies.sessionRegistry.fail(session.id, clientKey);
       } catch {
-        logger.warn('SESSION_SSE_CLOSE_FAILED');
+        logger.warn('SESSION_TERMINAL_TRANSITION_FAILED');
       }
+      cleanupRun(active);
       res.status(500).json({ error: 'RUN_START_FAILED' });
       return;
     }
 
-    const active: ActiveRun = {
-      session,
-      clientKey,
-      handle,
-      mode: input.mode,
-      phase: 'running',
-    };
-    activeRuns.set(session.id, active);
     emit(session.id, 'loop_step', { phase: 'starting', mode: input.mode });
-    observeCompletion(active, handle.completion);
+    observeCompletion(active, active.handle.completion);
 
     res.status(202).json({ sessionId: session.id, status: 'started' });
   });
@@ -615,13 +651,14 @@ export const createAgentRouter = (
         return;
       }
     } else {
-      if (!active.handle.continueAfterApproval) {
+      const handle = active.handle;
+      if (!handle?.continueAfterApproval) {
         res.status(409).json({ error: 'APPROVAL_CONTINUATION_UNAVAILABLE' });
         return;
       }
       active.phase = 'continuing';
       try {
-        const continuation = active.handle.continueAfterApproval();
+        const continuation = handle.continueAfterApproval();
         try {
           emit(sessionId, 'guardrail', { approved: true, sessionId });
         } catch {
@@ -681,12 +718,12 @@ const createTransientDeepSeekResource: ByokAdapterFactory = (apiKey) => {
   });
   return {
     adapter: {
-      sendMessage: (context) => {
+      sendMessage: (context, signal) => {
         const activeAdapter = adapter;
         if (!activeAdapter) {
           throw new Error('BYOK adapter is no longer available');
         }
-        return activeAdapter.sendMessage(context);
+        return activeAdapter.sendMessage(context, signal);
       },
     },
     release: () => {

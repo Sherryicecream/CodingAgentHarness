@@ -154,4 +154,38 @@ describe('redactSecrets', () => {
     expect(session.task).toContain(SENTINEL);
     expect(session.createdAt).toBe(createdAt);
   });
+
+  it('rejects live and revoked Proxy values without invoking any traps', () => {
+    const trapCalls = {
+      getPrototypeOf: 0,
+      ownKeys: 0,
+      getOwnPropertyDescriptor: 0,
+    };
+    const liveProxy = new Proxy({ value: SENTINEL }, {
+      getPrototypeOf(target) {
+        trapCalls.getPrototypeOf += 1;
+        return Reflect.getPrototypeOf(target);
+      },
+      ownKeys(target) {
+        trapCalls.ownKeys += 1;
+        return Reflect.ownKeys(target);
+      },
+      getOwnPropertyDescriptor(target, property) {
+        trapCalls.getOwnPropertyDescriptor += 1;
+        return Reflect.getOwnPropertyDescriptor(target, property);
+      },
+    });
+    const revoked = Proxy.revocable({ value: SENTINEL }, {});
+    revoked.revoke();
+
+    const result = redactSecrets([liveProxy, revoked.proxy], [SENTINEL]);
+
+    expect(result).toEqual(['[REDACTED]', '[REDACTED]']);
+    expect(trapCalls).toEqual({
+      getPrototypeOf: 0,
+      ownKeys: 0,
+      getOwnPropertyDescriptor: 0,
+    });
+    expect(JSON.stringify(result)).not.toContain(SENTINEL);
+  });
 });

@@ -457,6 +457,48 @@ describe('AgentLoop', () => {
       expect(executions).toBe(0);
       expect(result.session.toolCalls).toHaveLength(0);
     });
+
+    it('does not emit or record a tool result that returns after abort', async () => {
+      let markToolStarted!: () => void;
+      const toolStarted = new Promise<void>((resolve) => { markToolStarted = resolve; });
+      let resolveTool!: (result: ToolResult) => void;
+      const pendingTool = new Promise<ToolResult>((resolve) => { resolveTool = resolve; });
+      const tools = createToolRegistry();
+      tools.register({
+        ...makeWriteFileTool(),
+        execute: () => {
+          markToolStarted();
+          return pendingTool;
+        },
+      });
+      const events: Array<{ type: string; data: unknown }> = [];
+      const loop = createAgentLoop({
+        ...buildDeps({
+          llm: new MockLLMAdapter([makeResponse('working', [
+            makeToolCall('pending-tool', 'write_file', { path: 'late.txt' }),
+          ])]),
+          tools,
+          governance: createGovernanceService(),
+          feedback: makeMockFeedbackLoop(),
+          contextBuilder: createContextBuilder(),
+          stopCondition: createStopCondition(),
+        }),
+        onEvent: (type, data) => { events.push({ type, data }); },
+      });
+      const completion = loop.run('wait for tool', '/tmp/test');
+      await toolStarted;
+      loop.abort();
+      const eventCountAtAbort = events.length;
+
+      resolveTool({ success: true, output: 'sk-test-late-tool-sentinel' });
+      const result = await completion;
+
+      expect(result.status).toBe('failed');
+      expect(events).toHaveLength(eventCountAtAbort);
+      expect(JSON.stringify(events)).not.toContain('sk-test-late-tool-sentinel');
+      expect(result.session.toolCalls).toHaveLength(0);
+      expect(result.session.messages.some((message) => message.role === 'tool')).toBe(false);
+    });
   });
 
   describe('handleApproval', () => {

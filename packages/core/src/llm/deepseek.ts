@@ -57,15 +57,21 @@ export class DeepSeekAdapter implements LLMAdapter {
       })) : undefined,
     };
 
-    const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      signal,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(body),
-    });
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${this.apiKey}`,
+    };
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        signal,
+        headers,
+        body: JSON.stringify(body),
+      });
+    } finally {
+      headers.Authorization = '';
+    }
 
     if (!response.ok) {
       const text = await response.text();

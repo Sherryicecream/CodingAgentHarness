@@ -1,4 +1,5 @@
 import type { Session } from '@harness/core';
+import { types as utilTypes } from 'node:util';
 
 const REDACTED = '[REDACTED]';
 const CIRCULAR = '[Circular]';
@@ -47,6 +48,13 @@ export const redactSecrets = (
     }
     if (typeof current !== 'object') {
       return UNSERIALIZABLE;
+    }
+    try {
+      if (utilTypes.isProxy(current)) {
+        return REDACTED;
+      }
+    } catch {
+      return REDACTED;
     }
     if (ancestors.has(current)) {
       return CIRCULAR;
