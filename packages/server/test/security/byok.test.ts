@@ -16,13 +16,30 @@ const SENTINEL = 'sk-test-byok-sentinel';
 const temporaryPaths: string[] = [];
 const apps: HarnessApp[] = [];
 
+const emptyCredentialStore: CredentialStore = {
+  hasKey: () => false,
+  getKey: () => null,
+  setKey: () => undefined,
+  deleteKey: () => undefined,
+  listServices: () => [],
+};
+
+const emptySessionStore: SessionStore = {
+  save: async () => undefined,
+  load: async () => null,
+  list: async () => [],
+  delete: async () => undefined,
+};
+
 const createTestApp = async (options: Partial<AppOptions> = {}): Promise<HarnessApp> => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'harness-byok-'));
   temporaryPaths.push(workspaceRoot);
   const app = createApp({
-    mode: 'public',
+    mode: 'local',
     workspaceRoot,
     idGenerator: () => 'byok-session',
+    credentialStore: emptyCredentialStore,
+    sessionStore: emptySessionStore,
     ...options,
   });
   apps.push(app);
@@ -31,14 +48,6 @@ const createTestApp = async (options: Partial<AppOptions> = {}): Promise<Harness
 
 const completingAdapter: LLMAdapter = {
   sendMessage: async () => ({ content: 'Task completed.', toolCalls: [] }),
-};
-
-const emptyCredentialStore: CredentialStore = {
-  hasKey: () => false,
-  getKey: () => null,
-  setKey: () => undefined,
-  deleteKey: () => undefined,
-  listServices: () => [],
 };
 
 const waitForAsyncCompletion = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
@@ -111,9 +120,9 @@ describe('BYOK request security', () => {
     expect(JSON.stringify(response.body)).not.toContain(SENTINEL);
   });
 
-  it('rejects public BYOK over external HTTP with a stable safe error', async () => {
+  it('rejects non-demo requests in public mode with a stable policy error', async () => {
     vi.stubEnv('NODE_ENV', 'test');
-    const app = await createTestApp({ trustProxy: 1 });
+    const app = await createTestApp({ mode: 'public', trustProxy: 1 });
     await request(app)
       .post('/api/agent/sessions')
       .set('X-Forwarded-For', '203.0.113.10')
@@ -124,8 +133,8 @@ describe('BYOK request security', () => {
       .set('X-Forwarded-For', '203.0.113.10')
       .send({ sessionId: 'byok-session', task: 'work', mode: 'byok', apiKey: SENTINEL });
 
-    expect(response.status).toBe(400);
-    expect(response.body).toEqual({ error: 'BYOK_REQUIRES_HTTPS' });
+    expect(response.status).toBe(403);
+    expect(response.body).toEqual({ error: 'EXPERIENCE_NOT_ALLOWED' });
     expect(JSON.stringify(response.body)).not.toContain(SENTINEL);
   });
 

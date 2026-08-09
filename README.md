@@ -78,8 +78,9 @@ $env:HARNESS_MODE = "local"
 $env:HOST = "127.0.0.1"
 $env:PORT = "3000"
 npm.cmd start
-Start-Process http://127.0.0.1:3000
 ```
+
+`npm.cmd start` 会以前台方式运行。服务启动后，请在浏览器或第二个 PowerShell 窗口中打开 `http://127.0.0.1:3000`。
 
 云服务器公开演示应使用 `HARNESS_MODE=public`，并绑定 `HOST=0.0.0.0`；不要在公网暴露 `local` 模式。
 
@@ -406,7 +407,7 @@ services:
 ## 已知限制
 
 1. **Windows Server 部署**：本项目为类 Unix 环境开发。在 Windows Server 上，请确保已安装 Node.js 22+ 且 Vite 前端构建成功。`npm run build` 命令会同时构建后端和前端。
-2. **仅本地 Web 访问**：Web 界面设计为本地使用。远程部署需要配置安全组。
+2. **托管与本地边界**：托管的公网 `public` 模式仅用于 `demo` 演示；本地可信 `local` 模式必须绑定到回环地址，且不得暴露到公网。
 3. **测试解析器范围**：反馈闭环的 ResultParser 支持 Jest 和 Vitest 输出格式。其他测试框架（pytest、go test）需要自定义插件。
 4. **单用户模式**：Harness 设计为单用户、单项目使用。不支持多租户或并发会话隔离。
 5. **Windows 路径**：部分 Shell 命令假定 Unix 风格路径。在 Windows 上，建议使用 Git Bash 或 WSL 以获得完整兼容性。
