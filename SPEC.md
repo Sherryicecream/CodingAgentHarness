@@ -30,7 +30,7 @@ Agent = LLM + Harness。LLM 只负责"决定下一步做什么"，而 harness �
 | 3 | 作为开发者，当 agent 试图执行危险命令（如 `rm -rf`）时，系统会拦截并要求我确认 | 危险命令被拦截，未经确认不执行 |
 | 4 | 作为开发者，我能在 Web 面板上实时看到 agent 在做什么、每步工具调用及其结果 | Web 面板显示当前 agent 状态和工具调用记录 |
 | 5 | 作为开发者，我能查看历史会话，回顾 agent 的决策过程和修正次数 | 历史会话页面列出所有会话，可展开查看详情 |
-| 6 | 作为开发者，首次使用时有安全引导帮我配置 API Key（隐藏输入、不写磁盘明文） | 引导流程完成，key 存入系统密钥链 |
+| 6 | 作为开发者，首次使用时有安全引导帮我配置 API Key（隐藏输入、不写磁盘明文） | 引导流程完成，key 存入主密码保护的 AES-256-GCM 加密文件 |
 | 7 | 作为开发者，我可以通过配置文件声明 agent 的行为规则（如"不要修改 src/config 下的文件"） | 配置规则被 agent 遵守，违规操作被拦截 |
 
 ---
@@ -166,11 +166,11 @@ Agent = LLM + Harness。LLM 只负责"决定下一步做什么"，而 harness �
 
 | 威胁 | 对策 |
 |------|------|
-| API Key 硬编码 | 代码中无任何 key，仅从系统密钥链读取 |
+| API Key 硬编码 | 代码中无任何 key，仅从解锁后的内存或显式部署环境变量读取 |
 | API Key 提交到 Git | `.gitignore` 覆盖；pre-commit hook 扫描 |
 | API Key 泄露到日志 | 日志输出前过滤替换为 `***` |
-| 进程环境变量可见 | 不从 `.env` 读 key；运行时从密钥链读入内存 |
-| 首次运行无引导 | 引导式隐藏输入 → 存储到 Windows Credential Manager |
+| 进程环境变量可见 | 本地默认不依赖环境变量；部署环境变量属于显式运维配置 |
+| 首次运行无引导 | 引导式输入 API Key 与至少 12 字符主密码 → scrypt + AES-256-GCM 加密存储 |
 
 ### 可用性
 - 零安装：打开浏览器即可使用（线上版）
@@ -303,18 +303,18 @@ interface MemoryEntry {
 | 会话记录 | JSON 文件 | `~/.harness/sessions/` |
 | 记忆 | SQLite | `~/.harness/memory.db` |
 | 配置 | YAML | `.harness/config.yaml` |
-| 凭据 | 系统密钥链 | Windows Credential Manager |
+| 凭据 | 主密码保护的加密文件 | `~/.harness/credentials.enc`，scrypt + AES-256-GCM |
 
 ---
 
 ## 7. 凭据与分发设计
 
 ### 凭据管理流程
-1. 首次运行 → 检测无 key → 引导隐藏输入
-2. 存储到 Windows Credential Manager（key: `harness/deepseek-api-key`）
-3. 发送最小 API 请求验证 → 成功则确认，失败则提示重试
-4. 日常使用：启动时从密钥链读取 → 注入 LLMAdapter → 运行
-5. 管理命令：`harness config status`（不回显明文）、`harness config update`、`harness config clear`
+1. 首次运行或旧版文件迁移 → 输入 API Key 与至少 12 字符主密码
+2. 使用随机 salt/IV，通过 scrypt 派生密钥并以 AES-256-GCM 加密写入 `~/.harness/credentials.enc`
+3. 重启后凭据处于 locked 状态，必须显式解锁；API 响应只返回状态，不回显明文
+4. 解锁后可更新、测试、锁定或清除；忘记主密码无法恢复，需重新配置
+5. `DEEPSEEK_API_KEY` 仅作为显式部署环境变量来源，不写入该文件
 
 ### 公开/本地安全模式
 
@@ -322,7 +322,7 @@ interface MemoryEntry {
 
 Harness 通过 `HARNESS_MODE` 环境变量控制运行模式：
 
-- **`public`**（默认）：匿名访问，不暴露任何本地凭据、文件系统、Shell 或 Git 能力。适用于公开演示和受限的 BYOK 使用。
+- **`public`**（默认）：匿名访问，仅提供确定性的安全演示和服务器凭据体验；不暴露本地凭据、文件系统、Shell、Git 或公网 BYOK 能力。
 - **`local`**：完整可信模式，保留所有本地工具、凭据管理和配置功能。
 
 未设置或无效值默认解析为 `public`。
@@ -401,7 +401,7 @@ POST /api/agent/run               → { sessionId, task, mode, apiKey? }
 | `PORT` | `3000` | HTTP 监听端口 |
 | `HOST` | `0.0.0.0` | HTTP 监听地址 |
 | `DEEPSEEK_API_KEY` | — | 服务端 DeepSeek API Key（本地模式） |
-| `TRUST_PROXY` | `0` | 反向代理信任跳数（用于 HTTPS 检测） |
+| `HARNESS_TRUST_PROXY` | `0` | 反向代理信任跳数（用于 HTTPS 检测） |
 | `RATE_LIMIT_MAX` | `20` | 每小时每 IP 最大运行尝试次数 |
 | `RATE_LIMIT_WINDOW` | `3600000` | 速率限制窗口（毫秒） |
 | `CONCURRENT_MAX` | `2` | 每 IP 最大并发运行数 |
@@ -466,7 +466,7 @@ POST /api/agent/run               → { sessionId, task, mode, apiKey? }
 | 设计系统 | Open Design | 使用 Open Design 方法论定义 DESIGN.md，含完整的颜色/字体/间距/组件规范 |
 | CLI 框架 | 轻量封装 | 复用 core，不引入重量级 CLI 框架 |
 | 数据库 | better-sqlite3 | 零配置本地 SQLite，同步 API |
-| 凭据存储 | 加密文件 (AES-256-GCM) | 跨平台，无需原生编译，支持环境变量覆盖 |
+| 凭据存储 | 主密码保护的 scrypt + AES-256-GCM 加密文件 | 跨平台；环境变量仅作为显式部署来源 |
 | 测试框架 | Vitest | 快，TypeScript 原生支持 |
 | 打包 | tsup | 轻量 TypeScript 打包 |
 | 部署 | 阿里云 ECS (Docker) | 国内可访问，弹性计算，按量付费 |
@@ -504,5 +504,5 @@ POST /api/agent/run               → { sessionId, task, mode, apiKey? }
 | 记忆系统复杂度可能超出时间 | 先做关键词检索，向量检索作为可选增强 |
 | SSE 实时推送在 Render 下可用 | Render 支持长连接（Web Service），非 Serverless，没问题 |
 | Render 免费版 15 分钟休眠 | 休眠后自动唤醒（30-50s），接受此限制；或用 cron job 定时唤醒 |
-| Windows Credential Manager 兼容性 | 使用 keytar 库跨平台抽象，非 Windows 平台 fallback 到加密文件 |
+| 忘记主密码 | 无法恢复文件中的 API Key，需重新配置 |
 | 线上版 API Key 存储安全 | Render 环境变量加密存储，传输层 HTTPS，不落盘 |
