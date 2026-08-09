@@ -55,8 +55,8 @@ describe('public agent request boundaries', () => {
       sessionId: 'server-issued-session',
       mode: 'public',
       capabilities: {
-        allowedExperiences: ['demo', 'byok'],
-        allowByok: true,
+        allowedExperiences: ['demo'],
+        allowByok: false,
         allowProcessTools: false,
         allowServerCredentials: false,
         allowHttpByok: false,
@@ -564,16 +564,27 @@ describe('public agent request boundaries', () => {
     expect(excess.body).toEqual({ error: 'CONCURRENT_RUN_LIMIT' });
   });
 
-  it('rejects experience modes that are not allowed by the effective policy', async () => {
-    const app = await createPublicApp({ idGenerator: () => 'policy-session' });
+  it.each([
+    { mode: 'byok' as const, apiKey: 'forged-public-key' },
+    { mode: 'server' as const },
+  ])('rejects forged public $mode runs before agent construction', async ({ mode, apiKey }) => {
+    let agentRunCalls = 0;
+    const app = await createPublicApp({
+      idGenerator: () => 'policy-session',
+      agentRun: () => {
+        agentRunCalls += 1;
+        return pendingRun();
+      },
+    });
     await request(app).post('/api/agent/sessions').send({});
 
     const response = await request(app)
       .post('/api/agent/run')
-      .send({ sessionId: 'policy-session', task: 'work', mode: 'server' });
+      .send({ sessionId: 'policy-session', task: 'work', mode, ...(apiKey ? { apiKey } : {}) });
 
     expect(response.status).toBe(403);
     expect(response.body).toEqual({ error: 'EXPERIENCE_NOT_ALLOWED' });
+    expect(agentRunCalls).toBe(0);
   });
 
   it('rate limits run attempts independently of session validity', async () => {
