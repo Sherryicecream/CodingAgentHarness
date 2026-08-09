@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { FeedbackTimeline } from './FeedbackTimeline.js';
+import { loadPublicSessions } from '../history/public-history.js';
+
+export type SessionHistoryMode = 'public' | 'local';
 
 interface Session {
   id: string;
@@ -16,13 +19,19 @@ interface Session {
   }>;
 }
 
-export function SessionHistory() {
+export function SessionHistory({ mode }: { mode: SessionHistoryMode }) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
+    if (mode === 'public') {
+      setSessions(loadPublicSessions());
+      setLoading(false);
+      return;
+    }
+
     fetch('/api/sessions')
       .then(res => {
         if (res.status === 404) {
@@ -42,7 +51,7 @@ export function SessionHistory() {
         }
         setLoading(false);
       });
-  }, []);
+  }, [mode]);
 
   if (loading) return <div className="loading-text">加载会话列表...</div>;
   if (error) return <div className="event-error">错误：{error}</div>;

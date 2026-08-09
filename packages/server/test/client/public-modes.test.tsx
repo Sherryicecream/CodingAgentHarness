@@ -122,6 +122,8 @@ const renderLoadedApp = async (session: SessionResponse = publicSession()) => {
 
 beforeEach(() => {
   FakeEventSource.instances = [];
+  localStorage.clear();
+  sessionStorage.clear();
   vi.stubGlobal('EventSource', FakeEventSource);
   Object.defineProperty(window, 'isSecureContext', { configurable: true, value: false });
   window.history.replaceState({}, '', '/');
@@ -152,6 +154,24 @@ describe('runtime-owned public and local surfaces', () => {
     expect(screen.getByRole('button', { name: '历史' })).toBeTruthy();
     expect(screen.getByRole('radio', { name: '本地服务器凭据' })).toBeTruthy();
     expect(screen.getByText('进程工具：启用')).toBeTruthy();
+  });
+
+  it('keeps the public history page without requesting a private history endpoint', async () => {
+    const fetchSpy = installFetch(publicSession());
+    localStorage.setItem('harness.public.session-history.v1', JSON.stringify([{
+      id: 'public-history-1',
+      createdAt: '2026-08-09T00:00:00.000Z',
+      task: '之前的问题',
+      status: 'completed',
+      conclusion: '任务完成',
+      feedbackRuns: [],
+    }]));
+    await renderLoadedApp();
+
+    await userEvent.click(screen.getByRole('button', { name: '历史' }));
+
+    expect(screen.getByText('之前的问题')).toBeTruthy();
+    expect(fetchSpy.mock.calls.some(([url]) => String(url) === '/api/sessions')).toBe(false);
   });
 
   it('shows the config page with a public-mode notice when navigating to /config', async () => {
@@ -408,7 +428,7 @@ describe('transient key lifecycle', () => {
     });
     await waitFor(() => expect((screen.getByLabelText('DeepSeek API Key') as HTMLInputElement).value).toBe(''));
     expect(localSet).not.toHaveBeenCalled();
-    expect(localStorage.length).toBe(0);
+    expect(localStorage.getItem('harness.public.session-history.v1') ?? '').not.toContain(key);
     expect(sessionStorage.length).toBe(0);
     expect(consoleSpies.flatMap(spy => spy.mock.calls).flat().join(' ')).not.toContain(key);
     expect(window.location.href).not.toContain(key);

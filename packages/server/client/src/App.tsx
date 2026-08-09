@@ -56,7 +56,7 @@ export function App() {
       </header>
       {effectiveView === 'chat' ? (
         <ChatPanel runtimeInfo={runtimeInfo} acquireSession={acquireSession} />
-      ) : effectiveView === 'history' ? <SessionHistory /> : <ConfigPage />}
+      ) : effectiveView === 'history' ? <SessionHistory mode={runtimeInfo.mode} /> : <ConfigPage />}
     </div>
   );
 }

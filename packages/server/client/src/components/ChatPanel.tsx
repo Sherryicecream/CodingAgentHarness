@@ -4,6 +4,7 @@ import { useSSE } from '../hooks/useSSE.js';
 import { ToolCallCard } from './ToolCallCard.js';
 import { GuardrailDialog } from './GuardrailDialog.js';
 import { FeedbackTimeline } from './FeedbackTimeline.js';
+import { appendPublicSession, type PublicSessionHistory } from '../history/public-history.js';
 
 interface BrowserSecurityInfo {
   isSecureContext: boolean;
@@ -74,6 +75,7 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
   const mounted = useRef(true);
   const runGeneration = useRef(0);
   const runAbortController = useRef<AbortController | null>(null);
+  const recordedSessionId = useRef<string | null>(null);
   const { events, isConnected, error: streamError, connect, close } = useSSE();
   const byokAllowed = runtimeInfo.capabilities.allowHttpByok || isByokBrowserAllowed({
     isSecureContext: window.isSecureContext === true,
@@ -115,6 +117,29 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
       setApiKey('');
     }
   }, [lastEvent]);
+
+  useEffect(() => {
+    if (runtimeInfo.mode !== 'public' || !sessionId || !lastEvent) return;
+    if (lastEvent.type !== 'complete' && lastEvent.type !== 'error') return;
+    if (recordedSessionId.current === sessionId) return;
+
+    const historyEntry: PublicSessionHistory = {
+      id: sessionId,
+      createdAt: new Date().toISOString(),
+      task,
+      status: lastEvent.type === 'complete' ? 'completed' : 'failed',
+      conclusion: lastEvent.type === 'complete' ? '任务完成' : '运行失败',
+      feedbackRuns: feedbackRuns.map((feedback: any, index: number) => ({
+        iteration: index,
+        testResult: feedback.status === 'pass' ? 'pass' : 'fail',
+        failureCount: Array.isArray(feedback.failures) ? feedback.failures.length : 0,
+        fixApplied: false,
+        timeSpent: 0,
+      })),
+    };
+    appendPublicSession(historyEntry);
+    recordedSessionId.current = sessionId;
+  }, [feedbackRuns, lastEvent, runtimeInfo.mode, sessionId, task]);
 
   useEffect(() => {
     if (!streamError) return;
