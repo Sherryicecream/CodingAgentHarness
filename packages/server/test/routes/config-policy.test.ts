@@ -5,6 +5,10 @@ import { createApp } from '../../src/app.js';
 import type { CredentialStore } from '../../src/credential-store.js';
 
 const throwingStore = (): CredentialStore => ({
+  getState: () => 'empty',
+  unlock: () => false,
+  lock: () => undefined,
+  initialize: () => undefined,
   hasKey: () => { throw new Error('credential store must not be called'); },
   getKey: () => { throw new Error('credential store must not be called'); },
   setKey: () => { throw new Error('credential store must not be called'); },
@@ -48,6 +52,8 @@ describe('configuration policy boundary', () => {
   it.each([
     ['get', '/api/config/status'],
     ['post', '/api/config/key'],
+    ['post', '/api/config/unlock'],
+    ['post', '/api/config/lock'],
     ['delete', '/api/config/key'],
     ['get', '/api/config/guide'],
   ] as const)('returns 403 for public %s %s without touching credentials', async (method, path) => {
@@ -56,7 +62,7 @@ describe('configuration policy boundary', () => {
     const response = method === 'get'
       ? await request(app).get(path)
       : method === 'post'
-        ? await request(app).post(path).send({ key: 'sk-test-value' })
+      ? await request(app).post(path).send({ key: 'sk-test-value' })
         : await request(app).delete(path);
 
     expect(response.status).toBe(403);
@@ -65,7 +71,16 @@ describe('configuration policy boundary', () => {
 
   it('keeps credential configuration reachable in local mode', async () => {
     const values = new Map<string, string>();
+    let state: 'empty' | 'legacy' | 'locked' | 'unlocked' = 'empty';
     const store: CredentialStore = {
+      getState: () => state,
+      unlock: (password) => {
+        if (password !== 'correct horse battery staple') return false;
+        state = 'unlocked';
+        return true;
+      },
+      lock: () => { state = 'locked'; },
+      initialize: () => { state = 'unlocked'; },
       hasKey: (service) => values.has(service),
       getKey: (service) => values.get(service) ?? null,
       setKey: (service, key) => { values.set(service, key); },
@@ -78,12 +93,27 @@ describe('configuration policy boundary', () => {
       sessionStore: emptySessionStore(),
     });
 
-    const saved = await request(app).post('/api/config/key').send({ key: 'sk-local-value' });
+    const initialized = await request(app).post('/api/config/key').send({
+      key: 'sk-local-value',
+      masterPassword: 'correct horse battery staple',
+    });
     const status = await request(app).get('/api/config/status');
+    const locked = await request(app).post('/api/config/lock');
+    const blockedUpdate = await request(app).post('/api/config/key').send({ key: 'sk-new-value' });
+    const badUnlock = await request(app).post('/api/config/unlock').send({ masterPassword: 'wrong password' });
+    const unlocked = await request(app).post('/api/config/unlock').send({
+      masterPassword: 'correct horse battery staple',
+    });
+    const noKeyValue = await request(app).get('/api/config/key-value');
     const removed = await request(app).delete('/api/config/key');
 
-    expect(saved.status).toBe(200);
-    expect(status.body).toEqual({ hasKey: true, source: 'file' });
+    expect(initialized.status).toBe(200);
+    expect(status.body).toEqual({ hasKey: true, source: 'file', state: 'unlocked' });
+    expect(locked.status).toBe(200);
+    expect(blockedUpdate.status).toBe(423);
+    expect(badUnlock.status).toBe(401);
+    expect(unlocked.status).toBe(200);
+    expect(noKeyValue.status).toBe(404);
     expect(removed.status).toBe(200);
     expect(values.size).toBe(0);
   });

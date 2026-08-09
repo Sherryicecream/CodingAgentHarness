@@ -26,7 +26,16 @@ export const createConfigRouter = (
     const source = process.env.DEEPSEEK_API_KEY
       ? 'env'
       : hasKey ? 'file' : 'none';
-    res.json({ hasKey, source });
+    res.json({ hasKey, source, state: dependencies.credentialStore.getState() });
+  });
+
+  router.post('/unlock', (req: Request, res: Response) => {
+    const masterPassword = req.body?.masterPassword;
+    if (typeof masterPassword !== 'string' || !dependencies.credentialStore.unlock(masterPassword)) {
+      res.status(401).json({ error: 'INVALID_MASTER_PASSWORD' });
+      return;
+    }
+    res.json({ status: 'unlocked' });
   });
 
   router.post('/key', (req: Request, res: Response) => {
@@ -35,11 +44,40 @@ export const createConfigRouter = (
       res.status(400).json({ error: 'INVALID_API_KEY' });
       return;
     }
-    dependencies.credentialStore.setKey(SERVICE_NAME, key.trim());
+    const state = dependencies.credentialStore.getState();
+    try {
+      if (state === 'empty' || state === 'legacy') {
+        const masterPassword = req.body?.masterPassword;
+        if (typeof masterPassword !== 'string') {
+          res.status(400).json({ error: 'MASTER_PASSWORD_REQUIRED' });
+          return;
+        }
+        dependencies.credentialStore.initialize(masterPassword);
+      } else if (state === 'locked') {
+        res.status(423).json({ error: 'CREDENTIAL_STORE_LOCKED' });
+        return;
+      }
+      dependencies.credentialStore.setKey(SERVICE_NAME, key.trim());
+    } catch (error) {
+      if (error instanceof Error && error.message === 'MASTER_PASSWORD_TOO_SHORT') {
+        res.status(400).json({ error: 'MASTER_PASSWORD_TOO_SHORT' });
+        return;
+      }
+      throw error;
+    }
     res.json({ status: 'ok', message: 'API key stored' });
   });
 
+  router.post('/lock', (_req: Request, res: Response) => {
+    dependencies.credentialStore.lock();
+    res.json({ status: 'locked' });
+  });
+
   router.delete('/key', (_req: Request, res: Response) => {
+    if (dependencies.credentialStore.getState() === 'locked') {
+      res.status(423).json({ error: 'CREDENTIAL_STORE_LOCKED' });
+      return;
+    }
     dependencies.credentialStore.deleteKey(SERVICE_NAME);
     res.json({ status: 'ok', message: 'API key removed' });
   });
@@ -48,6 +86,7 @@ export const createConfigRouter = (
     const hasKey = dependencies.credentialStore.hasKey(SERVICE_NAME);
     res.json({
       needsSetup: !hasKey,
+      state: dependencies.credentialStore.getState(),
       message: hasKey
         ? 'API key is configured.'
         : 'Configure a DeepSeek API key to use a real model. Without one, the demo uses scripted responses.',
@@ -57,17 +96,6 @@ export const createConfigRouter = (
         'For deployments, prefer the DEEPSEEK_API_KEY environment variable',
       ],
     });
-  });
-
-  router.get('/key-value', (req: Request, res: Response) => {
-    // Only return the key in local mode for the same-machine client.
-    // This allows the chat page to pre-fill the BYOK field.
-    const key = dependencies.credentialStore.getKey(SERVICE_NAME);
-    if (key) {
-      res.json({ key });
-    } else {
-      res.status(404).json({ error: 'NO_KEY_CONFIGURED' });
-    }
   });
 
   return router;

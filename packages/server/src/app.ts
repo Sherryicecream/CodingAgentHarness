@@ -66,6 +66,10 @@ export interface AppOptions {
 }
 
 const disabledCredentialStore = (): CredentialStore => ({
+  getState: () => 'empty',
+  unlock: () => false,
+  lock: () => undefined,
+  initialize: () => { throw new Error('Credential store is disabled by runtime policy'); },
   hasKey: () => { throw new Error('Credential store is disabled by runtime policy'); },
   getKey: () => { throw new Error('Credential store is disabled by runtime policy'); },
   setKey: () => { throw new Error('Credential store is disabled by runtime policy'); },
