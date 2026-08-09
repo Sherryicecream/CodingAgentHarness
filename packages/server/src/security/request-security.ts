@@ -13,4 +13,5 @@ const isLoopbackAddress = (value: string | undefined): boolean => {
 export const isSecureByokRequest = (req: Request): boolean => (
   req.secure
   || isLoopbackAddress(req.ip || req.socket.remoteAddress)
+  || process.env.HARNESS_ALLOW_HTTP_BYOK === 'true'
 );

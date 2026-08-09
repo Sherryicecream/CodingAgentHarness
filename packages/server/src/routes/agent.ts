@@ -427,6 +427,7 @@ export const createAgentRouter = (
           allowByok: dependencies.policy.allowByok,
           allowProcessTools: dependencies.policy.allowProcessTools,
           allowServerCredentials: dependencies.policy.allowServerCredentials,
+          allowHttpByok: dependencies.policy.allowHttpByok,
         },
         workspaceRoot: dependencies.workspaceRoot ?? null,
         expiresAt: session.expiresAt.toISOString(),

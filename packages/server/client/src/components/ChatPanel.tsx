@@ -75,7 +75,7 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
   const runGeneration = useRef(0);
   const runAbortController = useRef<AbortController | null>(null);
   const { events, isConnected, error: streamError, connect, close } = useSSE();
-  const byokAllowed = isByokBrowserAllowed({
+  const byokAllowed = runtimeInfo.capabilities.allowHttpByok || isByokBrowserAllowed({
     isSecureContext: window.isSecureContext === true,
     hostname: window.location.hostname,
   });
@@ -271,7 +271,7 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
         })}
       </fieldset>
 
-      {!byokAllowed && runtimeInfo.capabilities.allowByok && (
+      {!byokAllowed && !runtimeInfo.capabilities.allowHttpByok && runtimeInfo.capabilities.allowByok && (
         <p className="security-notice" role="note">
           使用自己的 API Key 需要 HTTPS；仅 localhost、127.0.0.1 和 ::1 可在 HTTP 下开发调试。
         </p>

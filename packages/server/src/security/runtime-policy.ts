@@ -7,6 +7,7 @@ export interface RuntimePolicy {
   readonly allowServerCredentials: boolean;
   readonly allowByok: boolean;
   readonly allowProcessTools: boolean;
+  readonly allowHttpByok: boolean;
   readonly allowedExperiences: readonly RuntimeExperience[];
 }
 
@@ -15,6 +16,7 @@ export const PUBLIC_RUNTIME_POLICY: RuntimePolicy = Object.freeze({
   allowServerCredentials: false,
   allowByok: true,
   allowProcessTools: false,
+  allowHttpByok: process.env.HARNESS_ALLOW_HTTP_BYOK === 'true',
   allowedExperiences: Object.freeze(['demo', 'byok'] as const),
 });
 
@@ -23,6 +25,7 @@ export const LOCAL_RUNTIME_POLICY: RuntimePolicy = Object.freeze({
   allowServerCredentials: true,
   allowByok: true,
   allowProcessTools: true,
+  allowHttpByok: process.env.HARNESS_ALLOW_HTTP_BYOK === 'true',
   allowedExperiences: Object.freeze(['demo', 'byok', 'server'] as const),
 });
 

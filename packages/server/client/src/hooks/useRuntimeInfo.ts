@@ -8,6 +8,7 @@ export interface RuntimeCapabilities {
   allowByok: boolean;
   allowProcessTools: boolean;
   allowServerCredentials: boolean;
+  allowHttpByok: boolean;
 }
 
 export interface RuntimeSession {
