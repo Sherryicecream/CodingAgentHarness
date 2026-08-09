@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import type { RuntimeMode } from '../hooks/useRuntimeInfo.js';
 
 interface ConfigStatus {
   hasKey: boolean;
@@ -11,7 +12,11 @@ interface GuideInfo {
   instructions: string[];
 }
 
-export function ConfigPage() {
+interface ConfigPageProps {
+  mode: RuntimeMode;
+}
+
+export function ConfigPage({ mode }: ConfigPageProps) {
   const [status, setStatus] = useState<ConfigStatus | null>(null);
   const [guide, setGuide] = useState<GuideInfo | null>(null);
   const [apiKey, setApiKey] = useState('');
@@ -22,6 +27,7 @@ export function ConfigPage() {
   const [testResult, setTestResult] = useState<{ valid: boolean; error?: string } | null>(null);
 
   useEffect(() => {
+    if (mode === 'public') return;
     Promise.all([
       fetch('/api/config/status').then(r => {
         if (r.status === 403) throw new Error('CONFIG_DISABLED');
@@ -43,7 +49,7 @@ export function ConfigPage() {
       }
       setLoading(false);
     });
-  }, []);
+  }, [mode]);
 
   const handleSave = async () => {
     if (!apiKey.trim()) {
@@ -99,6 +105,17 @@ export function ConfigPage() {
       setTesting(false);
     }
   };
+
+  if (mode === 'public') {
+    return (
+      <div style={{ maxWidth: 600, margin: '0 auto' }}>
+        <h2 className="section-title">配置</h2>
+        <div className="card">
+          配置页面仅在本地模式下可用。请在受信任的本地环境运行完整项目，并设置 <code>HARNESS_MODE=local</code>。
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return <div className="loading-text">加载配置中...</div>;

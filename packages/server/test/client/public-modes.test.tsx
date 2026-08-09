@@ -68,8 +68,8 @@ const publicSession = (id = 'server-session-1'): SessionResponse => ({
   sessionId: id,
   mode: 'public',
   capabilities: {
-    allowedExperiences: ['demo', 'byok'],
-    allowByok: true,
+    allowedExperiences: ['demo'],
+    allowByok: false,
     allowProcessTools: false,
     allowServerCredentials: false,
     allowHttpByok: false,
@@ -136,11 +136,17 @@ afterEach(() => {
 });
 
 describe('runtime-owned public and local surfaces', () => {
-  it('shows public experiences and server-issued capability labels', async () => {
+  it('shows a fixed public catalog with only demo enabled and no key input', async () => {
     await renderLoadedApp();
 
-    expect(screen.getByRole('radio', { name: '安全演示' })).toBeTruthy();
-    expect(screen.getByRole('radio', { name: '使用自己的 API Key' })).toBeTruthy();
+    const experiences = screen.getAllByRole('radio') as HTMLInputElement[];
+    expect(experiences.map((input) => input.value)).toEqual(['demo', 'byok', 'server']);
+    expect(experiences.map((input) => input.disabled)).toEqual([false, true, true]);
+    expect(screen.getByText(/公网演示不接受 API Key/)).toBeTruthy();
+    expect(screen.getByText(/完整项目.*localhost.*127\.0\.0\.1/)).toBeTruthy();
+    expect(screen.getByText(/仅在本地可信模式可用/)).toBeTruthy();
+    expect(screen.getByText(/本地用户.*配置、更新和清除/)).toBeTruthy();
+    expect(screen.queryByLabelText('DeepSeek API Key')).toBeNull();
     expect(screen.getByText('进程工具：禁用')).toBeTruthy();
     expect(screen.getByText('服务器凭据：禁用')).toBeTruthy();
     expect(screen.getByRole('button', { name: '历史' })).toBeTruthy();
@@ -148,12 +154,21 @@ describe('runtime-owned public and local surfaces', () => {
   });
 
   it('preserves credential configuration only in local mode', async () => {
-    await renderLoadedApp(localSession());
+    Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
+    const fetchSpy = await renderLoadedApp(localSession());
 
     expect(screen.getByRole('button', { name: '配置' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '历史' })).toBeTruthy();
     expect(screen.getByRole('radio', { name: '本地服务器凭据' })).toBeTruthy();
+    expect((screen.getByRole('radio', { name: '安全演示' }) as HTMLInputElement).disabled).toBe(false);
+    expect((screen.getByRole('radio', { name: '使用自己的 API Key' }) as HTMLInputElement).disabled).toBe(false);
+    expect((screen.getByRole('radio', { name: '本地服务器凭据' }) as HTMLInputElement).disabled).toBe(false);
     expect(screen.getByText('进程工具：启用')).toBeTruthy();
+
+    await userEvent.click(screen.getByRole('button', { name: '配置' }));
+    await screen.findByText('API Key 状态');
+    expect(fetchSpy.mock.calls.some(([url]) => String(url) === '/api/config/status')).toBe(true);
+    expect(fetchSpy.mock.calls.some(([url]) => String(url) === '/api/config/guide')).toBe(true);
   });
 
   it('keeps the public history page without requesting a private history endpoint', async () => {
@@ -176,22 +191,17 @@ describe('runtime-owned public and local surfaces', () => {
 
   it('shows the config page with a public-mode notice when navigating to /config', async () => {
     window.history.replaceState({}, '', '/config');
-    const fetchSpy = installFetch(publicSession(), (url) => {
-      if (String(url).startsWith('/api/config/')) {
-        return jsonResponse({ error: 'CONFIG_DISABLED' }, 403);
-      }
-      return undefined;
-    });
+    const fetchSpy = installFetch(publicSession());
     render(<App />);
-    await screen.findByText('配置');
-    expect(screen.getByText(/配置页面仅在本地模式下可用/)).toBeTruthy();
-    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/config/'))).toBe(true);
+    await screen.findByText(/配置页面仅在本地模式下可用/);
+    expect(screen.getByText('HARNESS_MODE=local')).toBeTruthy();
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/config/'))).toBe(false);
   });
 });
 
 describe('BYOK browser boundary', () => {
   it('disables BYOK on an insecure non-loopback origin with an HTTPS explanation', async () => {
-    await renderLoadedApp();
+    await renderLoadedApp(localSession());
 
     const byok = screen.getByRole('radio', { name: '使用自己的 API Key' }) as HTMLInputElement;
     expect(byok.disabled).toBe(true);
@@ -200,7 +210,7 @@ describe('BYOK browser boundary', () => {
 
   it('enables BYOK in a secure context', async () => {
     Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
-    await renderLoadedApp();
+    await renderLoadedApp(localSession());
 
     expect((screen.getByRole('radio', { name: '使用自己的 API Key' }) as HTMLInputElement).disabled).toBe(false);
   });
@@ -287,10 +297,10 @@ describe('server-session-first run flow', () => {
     const pendingSession = new Promise<SessionResponse>((resolve) => {
       resolveSession = resolve;
     });
-    const fetchSpy = vi.fn();
+    const fetchSpy = vi.fn(async () => jsonResponse({}));
     vi.stubGlobal('fetch', fetchSpy);
     const { unmount } = render(
-      <ChatPanel runtimeInfo={publicSession()} acquireSession={() => pendingSession} />,
+      <ChatPanel runtimeInfo={localSession()} acquireSession={() => pendingSession} />,
     );
     await userEvent.click(screen.getByRole('radio', { name: '使用自己的 API Key' }));
     await userEvent.type(screen.getByLabelText('DeepSeek API Key'), 'arbitrary-format-secret');
@@ -299,12 +309,12 @@ describe('server-session-first run flow', () => {
 
     unmount();
     await act(async () => {
-      resolveSession(publicSession('late-session'));
+      resolveSession(localSession('late-session'));
       await pendingSession;
     });
 
     expect(FakeEventSource.instances).toHaveLength(0);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual(['/api/config/key-value']);
   });
 
   it('closes the previous stream before rebinding a retry to a new server session', async () => {
@@ -406,12 +416,12 @@ describe('transient key lifecycle', () => {
       vi.spyOn(console, 'error').mockImplementation(() => undefined),
     ];
     const bodies: unknown[] = [];
-    installFetch(publicSession(), (_url, init) => {
+    installFetch(localSession(), (_url, init) => {
       bodies.push(JSON.parse(String(init?.body)));
       return jsonResponse({ sessionId: 'server-session-1', status: 'started' }, 202);
     });
     render(<App />);
-    await screen.findByText('公开安全模式');
+    await screen.findByText('本地可信模式');
     await userEvent.click(screen.getByRole('radio', { name: '使用自己的 API Key' }));
     await userEvent.type(screen.getByLabelText('DeepSeek API Key'), key);
     await userEvent.type(screen.getByLabelText('任务'), 'safe byok task');
@@ -421,7 +431,7 @@ describe('transient key lifecycle', () => {
 
     await waitFor(() => expect(bodies).toHaveLength(1));
     expect(bodies[0]).toEqual({
-      sessionId: 'server-session-1',
+      sessionId: 'local-session-1',
       task: 'safe byok task',
       mode: 'byok',
       apiKey: key,
@@ -436,7 +446,7 @@ describe('transient key lifecycle', () => {
 
   it('clears the key on mode switch and every connection or terminal failure path', async () => {
     Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
-    await renderLoadedApp();
+    await renderLoadedApp(localSession());
     const byok = screen.getByRole('radio', { name: '使用自己的 API Key' });
     const demo = screen.getByRole('radio', { name: '安全演示' });
     await userEvent.click(byok);
@@ -456,7 +466,7 @@ describe('transient key lifecycle', () => {
 
   it('clears the key on a terminal SSE error and closes the stream', async () => {
     Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
-    await renderLoadedApp();
+    await renderLoadedApp(localSession());
     await userEvent.click(screen.getByRole('radio', { name: '使用自己的 API Key' }));
     await userEvent.type(screen.getByLabelText('DeepSeek API Key'), 'sk-test-terminal');
     await userEvent.type(screen.getByLabelText('任务'), 'terminal task');
@@ -477,7 +487,7 @@ describe('transient key lifecycle', () => {
     Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
     render(
       <ChatPanel
-        runtimeInfo={publicSession()}
+        runtimeInfo={localSession()}
         acquireSession={async () => { throw new Error('SESSION_ISSUE_FAILED'); }}
       />,
     );
@@ -493,9 +503,9 @@ describe('transient key lifecycle', () => {
 
   it('clears the key and closes the stream when the run request is rejected', async () => {
     Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
-    installFetch(publicSession(), () => jsonResponse({ error: 'RUN_START_FAILED' }, 500));
+    installFetch(localSession(), () => jsonResponse({ error: 'RUN_START_FAILED' }, 500));
     render(<App />);
-    await screen.findByText('公开安全模式');
+    await screen.findByText('本地可信模式');
     await userEvent.click(screen.getByRole('radio', { name: '使用自己的 API Key' }));
     await userEvent.type(screen.getByLabelText('DeepSeek API Key'), 'sk-test-run-failure');
     await userEvent.type(screen.getByLabelText('任务'), 'run failure task');
@@ -509,17 +519,13 @@ describe('transient key lifecycle', () => {
   });
 
   it('never renders a key echoed by tool or feedback return payloads', async () => {
-    Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
     const key = 'arbitrary-format-return-secret';
     await renderLoadedApp();
-    await userEvent.click(screen.getByRole('radio', { name: '使用自己的 API Key' }));
-    await userEvent.type(screen.getByLabelText('DeepSeek API Key'), key);
     await userEvent.type(screen.getByLabelText('任务'), 'redact returned secret');
     await userEvent.click(screen.getByRole('button', { name: '开始运行' }));
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
     const stream = FakeEventSource.instances[0];
     await act(async () => stream.open());
-    await waitFor(() => expect((screen.getByLabelText('DeepSeek API Key') as HTMLInputElement).value).toBe(''));
 
     await act(async () => stream.emit('tool_call', {
       name: 'read_file',
