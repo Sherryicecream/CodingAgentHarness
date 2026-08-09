@@ -57,6 +57,7 @@ export function createSSEManager(): SecretAwareSSEManager {
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
       });
+      res.flushHeaders();
       connections.set(sessionId, res);
 
       // Flush buffered events

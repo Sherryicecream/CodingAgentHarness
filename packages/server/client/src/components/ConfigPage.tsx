@@ -23,14 +23,24 @@ export function ConfigPage() {
 
   useEffect(() => {
     Promise.all([
-      fetch('/api/config/status').then(r => r.json()),
-      fetch('/api/config/guide').then(r => r.json()),
+      fetch('/api/config/status').then(r => {
+        if (r.status === 403) throw new Error('CONFIG_DISABLED');
+        return r.json();
+      }),
+      fetch('/api/config/guide').then(r => {
+        if (r.status === 403) throw new Error('CONFIG_DISABLED');
+        return r.json();
+      }),
     ]).then(([s, g]) => {
       setStatus(s);
       setGuide(g);
       setLoading(false);
-    }).catch(() => {
-      setMessage({ type: 'error', text: '无法连接到服务器' });
+    }).catch(err => {
+      if (err.message === 'CONFIG_DISABLED') {
+        setMessage({ type: 'info', text: '配置页面仅在本地模式下可用。当前为公开安全模式，无需配置 API Key。' });
+      } else {
+        setMessage({ type: 'error', text: '无法连接到服务器' });
+      }
       setLoading(false);
     });
   }, []);

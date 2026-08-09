@@ -24,13 +24,22 @@ export function SessionHistory() {
 
   useEffect(() => {
     fetch('/api/sessions')
-      .then(res => res.json())
+      .then(res => {
+        if (res.status === 404) {
+          throw new Error('NOT_AVAILABLE');
+        }
+        return res.json();
+      })
       .then(data => {
         setSessions(data.sessions || []);
         setLoading(false);
       })
       .catch(err => {
-        setError(err.message);
+        if (err.message === 'NOT_AVAILABLE') {
+          setError('历史会话仅在本地模式下可用。');
+        } else {
+          setError(err.message);
+        }
         setLoading(false);
       });
   }, []);

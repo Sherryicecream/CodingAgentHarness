@@ -12,8 +12,5 @@ const isLoopbackAddress = (value: string | undefined): boolean => {
 
 export const isSecureByokRequest = (req: Request): boolean => (
   req.secure
-  || (
-    process.env.NODE_ENV !== 'production'
-    && isLoopbackAddress(req.ip || req.socket.remoteAddress)
-  )
+  || isLoopbackAddress(req.ip || req.socket.remoteAddress)
 );

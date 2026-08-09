@@ -24,7 +24,7 @@ export function App() {
     );
   }
 
-  const effectiveView = runtimeInfo.mode === 'public' && view === 'config' ? 'chat' : view;
+  const effectiveView = view;
 
   return (
     <div className="app">
@@ -40,22 +40,18 @@ export function App() {
           >
             对话
           </button>
-          {runtimeInfo.mode === 'local' && (
-            <button
-              className={`nav-tab ${effectiveView === 'history' ? 'active' : ''}`}
-              onClick={() => setView('history')}
-            >
-              历史
-            </button>
-          )}
-          {runtimeInfo.mode === 'local' && (
-            <button
-              className={`nav-tab ${effectiveView === 'config' ? 'active' : ''}`}
-              onClick={() => setView('config')}
-            >
-              配置
-            </button>
-          )}
+          <button
+            className={`nav-tab ${effectiveView === 'history' ? 'active' : ''}`}
+            onClick={() => setView('history')}
+          >
+            历史
+          </button>
+          <button
+            className={`nav-tab ${effectiveView === 'config' ? 'active' : ''}`}
+            onClick={() => setView('config')}
+          >
+            配置
+          </button>
         </nav>
       </header>
       {effectiveView === 'chat' ? (

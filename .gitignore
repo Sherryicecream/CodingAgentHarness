@@ -36,6 +36,7 @@ coverage/
 # Superpowers specs (will be committed separately)
 docs/superpowers/specs/
 .harness-sessions/
+.harness-workspaces/
 
 # Machine-local agent settings
 .claude/settings.local.json

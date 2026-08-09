@@ -52,6 +52,7 @@ export interface AgentRouterDependencies {
   readonly sessionStore?: SessionStore;
   readonly abortTimeoutMs?: number;
   readonly historySaveTimeoutMs?: number;
+  readonly workspaceRoot?: string;
 }
 
 export interface ActiveExpiryResult {
@@ -427,6 +428,7 @@ export const createAgentRouter = (
           allowProcessTools: dependencies.policy.allowProcessTools,
           allowServerCredentials: dependencies.policy.allowServerCredentials,
         },
+        workspaceRoot: dependencies.workspaceRoot ?? null,
         expiresAt: session.expiresAt.toISOString(),
       });
     } catch {

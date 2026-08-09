@@ -59,5 +59,16 @@ export const createConfigRouter = (
     });
   });
 
+  router.get('/key-value', (req: Request, res: Response) => {
+    // Only return the key in local mode for the same-machine client.
+    // This allows the chat page to pre-fill the BYOK field.
+    const key = dependencies.credentialStore.getKey(SERVICE_NAME);
+    if (key) {
+      res.json({ key });
+    } else {
+      res.status(404).json({ error: 'NO_KEY_CONFIGURED' });
+    }
+  });
+
   return router;
 };

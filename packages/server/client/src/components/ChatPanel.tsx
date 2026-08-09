@@ -84,6 +84,21 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
   const isComplete = lastEvent?.type === 'complete';
   const feedbackRuns = events.filter((event) => event.type === 'feedback').map((event) => event.data);
 
+  // Auto-fill API key from server config when switching to BYOK mode
+  useEffect(() => {
+    if (experience !== 'byok' || !runtimeInfo.capabilities.allowServerCredentials) return;
+    let cancelled = false;
+    fetch('/api/config/key-value')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (!cancelled && data?.key) {
+          setApiKey(data.key);
+        }
+      })
+      .catch(() => { /* silently ignore */ });
+    return () => { cancelled = true; };
+  }, [experience, runtimeInfo.capabilities.allowServerCredentials]);
+
   useEffect(() => {
     const allowed = runtimeInfo.capabilities.allowedExperiences;
     if (!allowed.includes(experience)) {
@@ -160,7 +175,7 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
         throw new Error('EXPERIENCE_NOT_ALLOWED');
       }
       setSessionId(session.sessionId);
-      await connect(session.sessionId, 5_000);
+      await connect(session.sessionId, 15_000);
       if (!mounted.current || runGeneration.current !== generation) return;
 
       const request: {
@@ -183,10 +198,32 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
       });
       if (!mounted.current || runGeneration.current !== generation) return;
       setApiKey('');
-      if (!response.ok) throw new Error('RUN_START_FAILED');
-    } catch {
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body?.error || 'RUN_START_FAILED');
+      }
+    } catch (error: unknown) {
       if (!mounted.current || runGeneration.current !== generation) return;
-      setRunError('无法启动运行，请重试。');
+      const message = error instanceof Error ? error.message : '';
+      if (message === 'EXPERIENCE_NOT_ALLOWED') {
+        setRunError('当前体验方式不被允许，请切换其他模式。');
+      } else if (message === 'SSE_CONNECTION_TIMEOUT') {
+        setRunError('实时连接超时，请检查网络后重试。');
+      } else if (message === 'SSE_CONNECTION_FAILED') {
+        setRunError('无法建立实时连接，请刷新页面后重试。');
+      } else if (message === 'SESSION_ISSUE_FAILED') {
+        setRunError('无法创建会话，请刷新页面后重试。');
+      } else if (message === 'SESSION_NOT_FOUND') {
+        setRunError('会话已过期，请刷新页面后重试。');
+      } else if (message === 'RUN_RATE_LIMIT' || message === 'SESSION_RATE_LIMIT') {
+        setRunError('请求过于频繁，请稍后重试。');
+      } else if (message === 'CONCURRENT_RUN_LIMIT') {
+        setRunError('已有运行中的任务，请等待完成后再试。');
+      } else if (message === 'BYOK_REQUIRES_HTTPS') {
+        setRunError('BYOK 模式需要 HTTPS 连接。');
+      } else {
+        setRunError('无法启动运行，请重试。');
+      }
       stopStarting();
     } finally {
       if (runAbortController.current === abortController) {
@@ -215,7 +252,8 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
 
       <fieldset className="experience-selector" disabled={running}>
         <legend>体验方式</legend>
-        {runtimeInfo.capabilities.allowedExperiences.map((option) => {
+        {runtimeInfo.capabilities.allowedExperiences
+          .map((option) => {
           const disabled = option === 'byok' && (!runtimeInfo.capabilities.allowByok || !byokAllowed);
           return (
             <label key={option} className={`experience-option ${disabled ? 'disabled' : ''}`}>
@@ -288,6 +326,116 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
           </button>
         )}
       </section>
+
+      {/* 初始状态：欢迎引导 + 示例任务 */}
+      {!events.length && !running && !runError && !streamError && (
+        <div>
+          {/* 欢迎区域 */}
+          <div className="welcome-card">
+            <div className="welcome-header">
+              <div className="welcome-icon">H</div>
+              <div>
+                <div className="welcome-title">Harness — 编码智能体工作台</div>
+                <div className="welcome-subtitle">
+                  一个自带<strong>反馈闭环</strong>的 AI 编程助手。输入任务，Agent 自动完成编码、测试、修正。
+                </div>
+              </div>
+            </div>
+
+            {/* 工作原理 */}
+            <div className="welcome-section">
+              <div className="welcome-section-title">📋 工作原理</div>
+              <div className="flow-steps">
+                <div className="flow-step">
+                  <div className="flow-step-number">1</div>
+                  <div className="flow-step-content">
+                    <div className="flow-step-label">输入任务</div>
+                    <div className="flow-step-desc">用自然语言描述编程任务</div>
+                  </div>
+                  <div className="flow-step-arrow">→</div>
+                </div>
+                <div className="flow-step">
+                  <div className="flow-step-number">2</div>
+                  <div className="flow-step-content">
+                    <div className="flow-step-label">AI 编码</div>
+                    <div className="flow-step-desc">Agent 自动读写文件、执行命令</div>
+                  </div>
+                  <div className="flow-step-arrow">→</div>
+                </div>
+                <div className="flow-step">
+                  <div className="flow-step-number">3</div>
+                  <div className="flow-step-content">
+                    <div className="flow-step-label">自动测试</div>
+                    <div className="flow-step-desc">运行测试并分析失败原因</div>
+                  </div>
+                  <div className="flow-step-arrow">→</div>
+                </div>
+                <div className="flow-step">
+                  <div className="flow-step-number">4</div>
+                  <div className="flow-step-content">
+                    <div className="flow-step-label">反馈修正</div>
+                    <div className="flow-step-desc">测试失败则自动修复，循环直到通过</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 核心功能 */}
+            <div className="welcome-section">
+              <div className="welcome-section-title">🔧 核心功能</div>
+              <div className="feature-grid">
+                <div className="feature-item">
+                  <div className="feature-icon">🤖</div>
+                  <div>
+                    <div className="feature-label">自动编码与测试</div>
+                    <div className="feature-desc">输入任务，Agent 自动完成代码编写并运行测试验证</div>
+                  </div>
+                </div>
+                <div className="feature-item">
+                  <div className="feature-icon">🔄</div>
+                  <div>
+                    <div className="feature-label">智能反馈闭环</div>
+                    <div className="feature-desc">测试失败时自动分析原因、分类错误、生成修复建议</div>
+                  </div>
+                </div>
+                <div className="feature-item">
+                  <div className="feature-icon">🛡️</div>
+                  <div>
+                    <div className="feature-label">安全护栏</div>
+                    <div className="feature-desc">危险操作（如删除文件、强制推送）需人工确认后才执行</div>
+                  </div>
+                </div>
+                <div className="feature-item">
+                  <div className="feature-icon">📜</div>
+                  <div>
+                    <div className="feature-label">历史回顾</div>
+                    <div className="feature-desc">所有会话完整记录，可随时查看决策过程和修正记录</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 文件位置 */}
+            <div className="welcome-section">
+              <div className="welcome-section-title">📁 文件位置</div>
+              <div className="feature-item" style={{ marginBottom: 0 }}>
+                <div className="feature-icon">🗂️</div>
+                <div>
+                  <div className="feature-desc">
+                    Agent 创建的文件保存在服务器隔离工作区中：
+                  </div>
+                  <code className="file-location">
+                    {runtimeInfo.workspaceRoot ?? '&lt;工作区根目录&gt;'}\{'{会话ID}'}\
+                  </code>
+                  <div className="feature-desc" style={{ marginTop: 4, fontSize: 12, color: 'var(--color-text-muted)' }}>
+                    每个会话使用独立的隔离目录，任务完成后会自动清理。
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isConnected && !isComplete && (
         <div className="connection-status">
@@ -372,7 +520,7 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
 
       {isComplete && (
         <div className="card completion-note">
-          本次文件保存在服务器分配的隔离临时工作区中；浏览器不能选择或查看服务器路径。
+          文件保存在隔离工作区：<code>{runtimeInfo.workspaceRoot ?? '&lt;工作区&gt;'}\{sessionId}\</code>
         </div>
       )}
 

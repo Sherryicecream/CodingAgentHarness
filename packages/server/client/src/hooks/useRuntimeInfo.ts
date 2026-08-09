@@ -14,6 +14,7 @@ export interface RuntimeSession {
   sessionId: string;
   mode: RuntimeMode;
   capabilities: RuntimeCapabilities;
+  workspaceRoot: string | null;
   expiresAt: string;
 }
 
