@@ -17,6 +17,7 @@ interface ChatPanelProps {
 }
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+const EXPERIENCE_CATALOG: RuntimeExperience[] = ['demo', 'byok', 'server'];
 
 export const isByokBrowserAllowed = (info: BrowserSecurityInfo): boolean => (
   info.isSecureContext || LOOPBACK_HOSTS.has(info.hostname.toLowerCase())
@@ -277,9 +278,10 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
 
       <fieldset className="experience-selector" disabled={running}>
         <legend>体验方式</legend>
-        {runtimeInfo.capabilities.allowedExperiences
+        {EXPERIENCE_CATALOG
           .map((option) => {
-          const disabled = option === 'byok' && (!runtimeInfo.capabilities.allowByok || !byokAllowed);
+          const disabled = !runtimeInfo.capabilities.allowedExperiences.includes(option)
+            || (option === 'byok' && (!runtimeInfo.capabilities.allowByok || !byokAllowed));
           return (
             <label key={option} className={`experience-option ${disabled ? 'disabled' : ''}`}>
               <input
@@ -291,6 +293,16 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
                 onChange={() => changeExperience(option)}
               />
               <span>{experienceLabel(option)}</span>
+              {runtimeInfo.mode === 'public' && option === 'byok' && (
+                <span className="experience-option-description">
+                  公网演示不接受 API Key。完整项目可在 localhost 或 127.0.0.1 上运行。
+                </span>
+              )}
+              {runtimeInfo.mode === 'public' && option === 'server' && (
+                <span className="experience-option-description">
+                  服务器凭据仅在本地可信模式可用；由本地用户配置、更新和清除。
+                </span>
+              )}
             </label>
           );
         })}
@@ -302,7 +314,7 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
         </p>
       )}
 
-      {experience === 'byok' && byokAllowed && (
+      {experience === 'byok' && runtimeInfo.capabilities.allowByok && byokAllowed && (
         <div className="byok-field">
           <label htmlFor="deepseek-api-key">DeepSeek API Key</label>
           <input

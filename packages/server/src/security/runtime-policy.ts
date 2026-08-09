@@ -14,10 +14,10 @@ export interface RuntimePolicy {
 export const PUBLIC_RUNTIME_POLICY: RuntimePolicy = Object.freeze({
   mode: 'public',
   allowServerCredentials: false,
-  allowByok: true,
+  allowByok: false,
   allowProcessTools: false,
-  allowHttpByok: process.env.HARNESS_ALLOW_HTTP_BYOK === 'true',
-  allowedExperiences: Object.freeze(['demo', 'byok'] as const),
+  allowHttpByok: false,
+  allowedExperiences: Object.freeze(['demo'] as const),
 });
 
 export const LOCAL_RUNTIME_POLICY: RuntimePolicy = Object.freeze({

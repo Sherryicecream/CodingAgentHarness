@@ -8,19 +8,21 @@ describe('resolveRuntimePolicy', () => {
     expect(policy).toMatchObject({
       mode: 'public',
       allowServerCredentials: false,
-      allowByok: true,
+      allowByok: false,
       allowProcessTools: false,
       allowHttpByok: false,
-      allowedExperiences: ['demo', 'byok'],
+      allowedExperiences: ['demo'],
     });
   });
 
-  it('preserves only restricted experiences in public mode', () => {
+  it('permits only the demo experience in public mode', () => {
     const policy = resolveRuntimePolicy('public');
 
     expect(policy.allowServerCredentials).toBe(false);
+    expect(policy.allowByok).toBe(false);
     expect(policy.allowProcessTools).toBe(false);
-    expect(policy.allowedExperiences).toEqual(['demo', 'byok']);
+    expect(policy.allowHttpByok).toBe(false);
+    expect(policy.allowedExperiences).toEqual(['demo']);
   });
 
   it('permits the complete trusted capability set in local mode', () => {
