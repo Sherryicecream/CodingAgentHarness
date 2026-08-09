@@ -13,7 +13,7 @@ interface BrowserSecurityInfo {
 
 interface ChatPanelProps {
   runtimeInfo: RuntimeSession;
-  acquireSession(): Promise<RuntimeSession>;
+  acquireSession(signal?: AbortSignal): Promise<RuntimeSession>;
 }
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
@@ -194,7 +194,7 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
     setTask(finalTask);
 
     try {
-      const session = await acquireSession();
+      const session = await acquireSession(abortController.signal);
       if (!mounted.current || runGeneration.current !== generation) return;
       if (!session.capabilities.allowedExperiences.includes(experience)) {
         throw new Error('EXPERIENCE_NOT_ALLOWED');

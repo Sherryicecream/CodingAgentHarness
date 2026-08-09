@@ -19,11 +19,12 @@ export interface RuntimeSession {
   expiresAt: string;
 }
 
-const issueSession = async (): Promise<RuntimeSession> => {
+const issueSession = async (signal?: AbortSignal): Promise<RuntimeSession> => {
   const response = await fetch('/api/agent/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({}),
+    signal,
   });
   if (!response.ok) throw new Error('SESSION_ISSUE_FAILED');
   return response.json() as Promise<RuntimeSession>;
@@ -37,8 +38,8 @@ export function useRuntimeInfo() {
   const bootstrapRequest = useRef<Promise<RuntimeSession> | null>(null);
   const mounted = useRef(true);
 
-  const load = useCallback(async (): Promise<RuntimeSession> => {
-    const session = await issueSession();
+  const load = useCallback(async (signal?: AbortSignal): Promise<RuntimeSession> => {
+    const session = await issueSession(signal);
     if (mounted.current) {
       setRuntimeInfo(session);
       setError(null);
@@ -65,13 +66,13 @@ export function useRuntimeInfo() {
     };
   }, [load]);
 
-  const acquireSession = useCallback(async (): Promise<RuntimeSession> => {
+  const acquireSession = useCallback(async (signal?: AbortSignal): Promise<RuntimeSession> => {
     const cached = cachedSession.current;
     if (cached) {
       cachedSession.current = null;
       return cached;
     }
-    return load();
+    return load(signal);
   }, [load]);
 
   const retry = useCallback(() => {
