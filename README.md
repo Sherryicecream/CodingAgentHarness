@@ -54,6 +54,34 @@ cd packages/server && npm start
 # 打开 http://localhost:3000
 ```
 
+### 可重复演示（无需真实 API Key）
+
+核心机制演示使用确定性的 Mock LLM，可直接运行：
+
+```bash
+npm test --workspace @harness/core -- demo
+npm test --workspace @harness/server -- public-demo
+```
+
+公开模式下，浏览器的“对话 / 历史 / 配置”三个页面都会保留；公开模式的历史记录保存在当前浏览器本地，不会上传 API Key。
+
+### Windows PowerShell 启动
+
+在仓库根目录逐行执行：
+
+```powershell
+npm.cmd ci
+npm.cmd run build
+Set-Location .\packages\server
+$env:NODE_ENV = "development"
+$env:HARNESS_MODE = "local"
+$env:HOST = "127.0.0.1"
+$env:PORT = "3000"
+npm.cmd start
+```
+
+然后访问 http://127.0.0.1:3000。云服务器公开演示应使用 `HARNESS_MODE=public`，并绑定 `HOST=0.0.0.0`；不要在公网暴露 `local` 模式。
+
 ### 使用 CLI
 
 ```bash

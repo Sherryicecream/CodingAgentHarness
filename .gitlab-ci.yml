@@ -1,0 +1,9 @@
+stages:
+  - test
+
+unit-test:
+  stage: test
+  image: node:22-bookworm
+  script:
+    - npm ci
+    - npm test
