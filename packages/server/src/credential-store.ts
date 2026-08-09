@@ -1,141 +1,227 @@
-import { randomBytes, createCipheriv, createDecipheriv, scryptSync } from 'node:crypto';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const HARNESS_DIR = join(homedir(), '.harness');
 const CREDENTIALS_FILE = join(HARNESS_DIR, 'credentials.enc');
 const ALGORITHM = 'aes-256-gcm';
 const KEY_LENGTH = 32;
-const IV_LENGTH = 16;
+const SALT_LENGTH = 16;
+const IV_LENGTH = 12;
 const TAG_LENGTH = 16;
-const SALT = 'harness-credential-store-v1';
+const MIN_PASSWORD_LENGTH = 12;
+const MAX_PASSWORD_LENGTH = 128;
+const KDF = { name: 'scrypt', N: 32_768, r: 8, p: 1 } as const;
+const VERIFIER = 'harness-credential-store-v2';
 
-/**
- * Derive a 256-bit key from a machine-specific seed.
- * Uses the machine's hostname + OS user as the seed, so the key is
- * bound to the machine and user account (defense in depth).
- */
-function deriveKey(): Buffer {
-  const seed = `${process.env.COMPUTERNAME || process.env.HOSTNAME || 'unknown'}:${process.env.USERNAME || process.env.USER || 'unknown'}`;
-  return scryptSync(seed, SALT, KEY_LENGTH);
+export type CredentialStoreState = 'empty' | 'legacy' | 'locked' | 'unlocked';
+
+interface EncryptedValue {
+  iv: string;
+  ciphertext: string;
+  tag: string;
 }
 
-/**
- * Encrypt a plaintext string using AES-256-GCM.
- * Returns: base64(iv + ciphertext + authTag)
- */
-function encrypt(plaintext: string): string {
-  const key = deriveKey();
-  const iv = randomBytes(IV_LENGTH);
-  const cipher = createCipheriv(ALGORITHM, key, iv);
-  const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
-  const authTag = cipher.getAuthTag();
-  return Buffer.concat([iv, encrypted, authTag]).toString('base64');
-}
-
-/**
- * Decrypt a base64-encoded AES-256-GCM ciphertext.
- * Expected format: base64(iv(16) + ciphertext(N) + authTag(16))
- */
-function decrypt(ciphertext: string): string {
-  const key = deriveKey();
-  const raw = Buffer.from(ciphertext, 'base64');
-  const iv = raw.subarray(0, IV_LENGTH);
-  const authTag = raw.subarray(raw.length - TAG_LENGTH);
-  const data = raw.subarray(IV_LENGTH, raw.length - TAG_LENGTH);
-  const decipher = createDecipheriv(ALGORITHM, key, iv);
-  decipher.setAuthTag(authTag);
-  return decipher.update(data) + decipher.final('utf8');
+interface CredentialEnvelope {
+  version: 2;
+  kdf: { name: 'scrypt'; salt: string; N: number; r: number; p: number };
+  verifier: EncryptedValue;
+  entries: Record<string, EncryptedValue>;
 }
 
 export interface CredentialStore {
-  /** Check if a key is configured */
+  getState(): CredentialStoreState;
+  unlock(masterPassword: string): boolean;
+  lock(): void;
+  initialize(masterPassword: string): void;
   hasKey(service: string): boolean;
-  /** Get a stored key (returns null if not configured) */
   getKey(service: string): string | null;
-  /** Store a key */
   setKey(service: string, key: string): void;
-  /** Delete a stored key */
   deleteKey(service: string): void;
-  /** List all services that have keys stored */
   listServices(): string[];
 }
 
-/**
- * Create an encrypted file-based credential store.
- *
- * Credentials are stored in ~/.harness/credentials.enc as an encrypted JSON object.
- * The encryption key is derived from the machine's hostname + OS user,
- * providing machine-binding without requiring a master password.
- *
- * For production/deployment, use the DEEPSEEK_API_KEY environment variable instead.
- */
-export function createCredentialStore(): CredentialStore {
-  // Ensure the harness directory exists
-  if (!existsSync(HARNESS_DIR)) {
-    mkdirSync(HARNESS_DIR, { recursive: true });
-  }
+export interface CredentialStoreOptions {
+  readonly filePath?: string;
+}
 
-  function readStore(): Record<string, string> {
-    if (!existsSync(CREDENTIALS_FILE)) {
-      return {};
-    }
-    try {
-      const raw = readFileSync(CREDENTIALS_FILE, 'utf-8').trim();
-      if (!raw) return {};
-      const decrypted = decrypt(raw);
-      return JSON.parse(decrypted);
-    } catch {
-      // If decryption fails (e.g., machine changed), treat as empty
-      return {};
-    }
-  }
+const isValidPassword = (password: string): boolean => (
+  password.length >= MIN_PASSWORD_LENGTH && password.length <= MAX_PASSWORD_LENGTH
+);
 
-  function writeStore(data: Record<string, string>): void {
-    const plaintext = JSON.stringify(data);
-    const encrypted = encrypt(plaintext);
-    writeFileSync(CREDENTIALS_FILE, encrypted, 'utf-8');
-  }
+const passwordError = (): Error => new Error('MASTER_PASSWORD_TOO_SHORT');
 
+const deriveKey = (password: string, salt: Buffer, params = KDF): Buffer => scryptSync(
+  password,
+  salt,
+  KEY_LENGTH,
+  { N: params.N, r: params.r, p: params.p, maxmem: 64 * 1024 * 1024 },
+);
+
+const encrypt = (plaintext: string, key: Buffer): EncryptedValue => {
+  const iv = randomBytes(IV_LENGTH);
+  const cipher = createCipheriv(ALGORITHM, key, iv);
+  const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
   return {
+    iv: iv.toString('base64'),
+    ciphertext: ciphertext.toString('base64'),
+    tag: cipher.getAuthTag().toString('base64'),
+  };
+};
+
+const decrypt = (value: EncryptedValue, key: Buffer): string => {
+  const decipher = createDecipheriv(ALGORITHM, key, Buffer.from(value.iv, 'base64'));
+  decipher.setAuthTag(Buffer.from(value.tag, 'base64'));
+  return decipher.update(Buffer.from(value.ciphertext, 'base64')) + decipher.final('utf8');
+};
+
+const isEncryptedValue = (value: unknown): value is EncryptedValue => (
+  !!value && typeof value === 'object'
+  && typeof (value as EncryptedValue).iv === 'string'
+  && typeof (value as EncryptedValue).ciphertext === 'string'
+  && typeof (value as EncryptedValue).tag === 'string'
+);
+
+const parseEnvelope = (raw: string): CredentialEnvelope | null => {
+  try {
+    const parsed = JSON.parse(raw) as Partial<CredentialEnvelope>;
+    if (parsed.version !== 2 || !parsed.kdf || parsed.kdf.name !== 'scrypt'
+      || typeof parsed.kdf.salt !== 'string' || !isEncryptedValue(parsed.verifier)
+      || !parsed.entries || typeof parsed.entries !== 'object') return null;
+    for (const entry of Object.values(parsed.entries)) {
+      if (!isEncryptedValue(entry)) return null;
+    }
+    return parsed as CredentialEnvelope;
+  } catch {
+    return null;
+  }
+};
+
+const ensurePassword = (password: string): void => {
+  if (!isValidPassword(password)) throw passwordError();
+};
+
+export function createCredentialStore(options: CredentialStoreOptions = {}): CredentialStore {
+  const filePath = options.filePath ?? CREDENTIALS_FILE;
+  const directory = dirname(filePath);
+  if (!existsSync(directory)) mkdirSync(directory, { recursive: true, mode: 0o700 });
+  try { chmodSync(directory, 0o700); } catch { /* Windows may not expose POSIX modes. */ }
+
+  let derivedKey: Buffer | null = null;
+
+  const readEnvelope = (): CredentialEnvelope | null => {
+    if (!existsSync(filePath)) return null;
+    try { return parseEnvelope(readFileSync(filePath, 'utf8').trim()); } catch { return null; }
+  };
+
+  const hasFile = (): boolean => existsSync(filePath);
+
+  const writeEnvelope = (envelope: CredentialEnvelope): void => {
+    const temporaryPath = `${filePath}.tmp-${randomBytes(8).toString('hex')}`;
+    try {
+      writeFileSync(temporaryPath, JSON.stringify(envelope), { encoding: 'utf8', mode: 0o600 });
+      try { chmodSync(temporaryPath, 0o600); } catch { /* Windows may not expose POSIX modes. */ }
+      renameSync(temporaryPath, filePath);
+      try { chmodSync(filePath, 0o600); } catch { /* Windows may not expose POSIX modes. */ }
+    } finally {
+      if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
+    }
+  };
+
+  const requireUnlocked = (): Buffer => {
+    if (!derivedKey) throw new Error('CREDENTIAL_STORE_LOCKED');
+    return derivedKey;
+  };
+
+  const store: CredentialStore = {
+    getState(): CredentialStoreState {
+      if (derivedKey) return 'unlocked';
+      if (!hasFile()) return 'empty';
+      return readEnvelope() ? 'locked' : 'legacy';
+    },
+
+    initialize(masterPassword: string): void {
+      ensurePassword(masterPassword);
+      const salt = randomBytes(SALT_LENGTH);
+      const key = deriveKey(masterPassword, salt);
+      const envelope: CredentialEnvelope = {
+        version: 2,
+        kdf: { ...KDF, salt: salt.toString('base64') },
+        verifier: encrypt(VERIFIER, key),
+        entries: {},
+      };
+      writeEnvelope(envelope);
+      derivedKey?.fill(0);
+      derivedKey = key;
+    },
+
+    unlock(masterPassword: string): boolean {
+      if (!isValidPassword(masterPassword)) return false;
+      const envelope = readEnvelope();
+      if (!envelope) return false;
+      try {
+        const salt = Buffer.from(envelope.kdf.salt, 'base64');
+        const key = deriveKey(masterPassword, salt, envelope.kdf);
+        if (decrypt(envelope.verifier, key) !== VERIFIER) {
+          key.fill(0);
+          return false;
+        }
+        derivedKey?.fill(0);
+        derivedKey = key;
+        return true;
+      } catch {
+        return false;
+      }
+    },
+
+    lock(): void {
+      derivedKey?.fill(0);
+      derivedKey = null;
+    },
+
     hasKey(service: string): boolean {
-      return !!process.env[serviceToEnvVar(service)] || (service in readStore());
+      return !!process.env[serviceToEnvVar(service)] || !!readEnvelope()?.entries[service];
     },
 
     getKey(service: string): string | null {
-      // Environment variable takes precedence (for production deployment)
       const envVar = process.env[serviceToEnvVar(service)];
       if (envVar) return envVar;
-      const store = readStore();
-      return store[service] ?? null;
+      const envelope = readEnvelope();
+      const entry = envelope?.entries[service];
+      if (!entry || !derivedKey) return null;
+      try { return decrypt(entry, derivedKey); } catch { return null; }
     },
 
     setKey(service: string, key: string): void {
-      const store = readStore();
-      store[service] = key;
-      writeStore(store);
+      const encryptionKey = requireUnlocked();
+      const envelope = readEnvelope();
+      if (!envelope) throw new Error('CREDENTIAL_STORE_NOT_INITIALIZED');
+      envelope.entries[service] = encrypt(key, encryptionKey);
+      writeEnvelope(envelope);
     },
 
     deleteKey(service: string): void {
-      const store = readStore();
-      delete store[service];
-      writeStore(store);
+      requireUnlocked();
+      const envelope = readEnvelope();
+      if (!envelope) return;
+      delete envelope.entries[service];
+      if (Object.keys(envelope.entries).length === 0) {
+        store.lock();
+        if (existsSync(filePath)) unlinkSync(filePath);
+        return;
+      }
+      writeEnvelope(envelope);
     },
 
     listServices(): string[] {
-      return Object.keys(readStore());
+      return Object.keys(readEnvelope()?.entries ?? {});
     },
   };
+
+  return store;
 }
 
-/**
- * Convert a service name to an environment variable name.
- * E.g., "harness/deepseek-api-key" → "DEEPSEEK_API_KEY"
- */
 function serviceToEnvVar(service: string): string {
-  return service
-    .replace(/^harness\//, '')
-    .replace(/-/g, '_')
-    .toUpperCase();
+  return service.replace(/^harness\//, '').replace(/-/g, '_').toUpperCase();
 }
