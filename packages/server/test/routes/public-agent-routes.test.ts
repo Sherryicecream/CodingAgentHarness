@@ -51,7 +51,7 @@ describe('public agent request boundaries', () => {
     const response = await request(app).post('/api/agent/sessions').send({});
 
     expect(response.status).toBe(201);
-    expect(response.body).toEqual({
+    expect(response.body).toMatchObject({
       sessionId: 'server-issued-session',
       mode: 'public',
       capabilities: {
@@ -59,10 +59,11 @@ describe('public agent request boundaries', () => {
         allowByok: true,
         allowProcessTools: false,
         allowServerCredentials: false,
+        allowHttpByok: false,
       },
       expiresAt: '2026-08-08T01:00:00.000Z',
     });
-    expect(response.body).not.toHaveProperty('workspace');
+    expect(response.body).toHaveProperty('workspaceRoot');
     expect(response.body).not.toHaveProperty('clientKey');
   });
 

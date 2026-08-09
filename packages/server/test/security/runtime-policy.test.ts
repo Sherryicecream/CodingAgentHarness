@@ -10,6 +10,7 @@ describe('resolveRuntimePolicy', () => {
       allowServerCredentials: false,
       allowByok: true,
       allowProcessTools: false,
+      allowHttpByok: false,
       allowedExperiences: ['demo', 'byok'],
     });
   });
@@ -30,6 +31,7 @@ describe('resolveRuntimePolicy', () => {
       allowServerCredentials: true,
       allowByok: true,
       allowProcessTools: true,
+      allowHttpByok: false,
       allowedExperiences: ['demo', 'byok', 'server'],
     });
   });

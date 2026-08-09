@@ -15,6 +15,7 @@ interface SessionResponse {
     allowByok: boolean;
     allowProcessTools: boolean;
     allowServerCredentials: boolean;
+    allowHttpByok: boolean;
   };
   expiresAt: string;
 }
@@ -71,6 +72,7 @@ const publicSession = (id = 'server-session-1'): SessionResponse => ({
     allowByok: true,
     allowProcessTools: false,
     allowServerCredentials: false,
+    allowHttpByok: false,
   },
   expiresAt: '2030-01-01T00:00:00.000Z',
 });
@@ -83,6 +85,7 @@ const localSession = (id = 'local-session-1'): SessionResponse => ({
     allowByok: true,
     allowProcessTools: true,
     allowServerCredentials: true,
+    allowHttpByok: false,
   },
   expiresAt: '2030-01-01T00:00:00.000Z',
 });
@@ -138,8 +141,8 @@ describe('runtime-owned public and local surfaces', () => {
     expect(screen.getByRole('radio', { name: '使用自己的 API Key' })).toBeTruthy();
     expect(screen.getByText('进程工具：禁用')).toBeTruthy();
     expect(screen.getByText('服务器凭据：禁用')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: '历史' })).toBeNull();
-    expect(screen.queryByRole('button', { name: '配置' })).toBeNull();
+    expect(screen.getByRole('button', { name: '历史' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '配置' })).toBeTruthy();
   });
 
   it('preserves credential configuration only in local mode', async () => {
@@ -151,12 +154,18 @@ describe('runtime-owned public and local surfaces', () => {
     expect(screen.getByText('进程工具：启用')).toBeTruthy();
   });
 
-  it('falls back from a direct config route without touching config APIs in public mode', async () => {
+  it('shows the config page with a public-mode notice when navigating to /config', async () => {
     window.history.replaceState({}, '', '/config');
-    const fetchSpy = await renderLoadedApp();
-
-    expect(screen.getByRole('heading', { name: '开始一个编码任务' })).toBeTruthy();
-    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/config/'))).toBe(false);
+    const fetchSpy = installFetch(publicSession(), (url) => {
+      if (String(url).startsWith('/api/config/')) {
+        return jsonResponse({ error: 'CONFIG_DISABLED' }, 403);
+      }
+      return undefined;
+    });
+    render(<App />);
+    await screen.findByText('配置');
+    expect(screen.getByText(/配置页面仅在本地模式下可用/)).toBeTruthy();
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/config/'))).toBe(true);
   });
 });
 

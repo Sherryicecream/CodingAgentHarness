@@ -11,6 +11,7 @@ const createResponseCapture = () => {
     writeHead: () => response,
     write: (chunk: string) => { chunks.push(chunk); return true; },
     end: () => { ended = true; return response; },
+    flushHeaders: () => {},
   } as unknown as Response;
   return {
     response,
