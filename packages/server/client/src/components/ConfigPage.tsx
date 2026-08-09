@@ -1,9 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { RuntimeMode } from '../hooks/useRuntimeInfo.js';
+
+type CredentialState = 'empty' | 'legacy' | 'locked' | 'unlocked';
 
 interface ConfigStatus {
   hasKey: boolean;
   source: string;
+  state: CredentialState;
 }
 
 interface GuideInfo {
@@ -12,225 +15,173 @@ interface GuideInfo {
   instructions: string[];
 }
 
-interface ConfigPageProps {
-  mode: RuntimeMode;
-}
+interface ConfigPageProps { mode: RuntimeMode }
+
+const isPasswordValid = (value: string): boolean => value.length >= 12 && value.length <= 128;
 
 export function ConfigPage({ mode }: ConfigPageProps) {
   const [status, setStatus] = useState<ConfigStatus | null>(null);
   const [guide, setGuide] = useState<GuideInfo | null>(null);
   const [apiKey, setApiKey] = useState('');
-  const [showKey, setShowKey] = useState(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const [masterPassword, setMasterPassword] = useState('');
   const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ valid: boolean; error?: string } | null>(null);
 
   useEffect(() => {
-    if (mode === 'public') return;
-    Promise.all([
-      fetch('/api/config/status').then(r => {
-        if (r.status === 403) throw new Error('CONFIG_DISABLED');
-        return r.json();
-      }),
-      fetch('/api/config/guide').then(r => {
-        if (r.status === 403) throw new Error('CONFIG_DISABLED');
-        return r.json();
-      }),
-    ]).then(([s, g]) => {
-      setStatus(s);
-      setGuide(g);
+    if (mode === 'public') {
       setLoading(false);
-    }).catch(err => {
-      if (err.message === 'CONFIG_DISABLED') {
-        setMessage({ type: 'info', text: '配置页面仅在本地模式下可用。当前为公开安全模式，无需配置 API Key。' });
-      } else {
-        setMessage({ type: 'error', text: '无法连接到服务器' });
-      }
-      setLoading(false);
-    });
-  }, [mode]);
-
-  const handleSave = async () => {
-    if (!apiKey.trim()) {
-      setMessage({ type: 'error', text: '请输入 API Key' });
       return;
     }
-    try {
-      const res = await fetch('/api/config/key', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: apiKey.trim() }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setMessage({ type: 'success', text: 'API Key 已安全保存（加密存储）' });
-        setApiKey('');
-        setStatus({ hasKey: true, source: 'file' });
-      } else {
-        setMessage({ type: 'error', text: data.error || '保存失败' });
-      }
-    } catch {
-      setMessage({ type: 'error', text: '网络错误' });
-    }
-  };
+    Promise.all([
+      fetch('/api/config/status').then((response) => response.json()),
+      fetch('/api/config/guide').then((response) => response.json()),
+    ]).then(([nextStatus, nextGuide]) => {
+      setStatus(nextStatus as ConfigStatus);
+      setGuide(nextGuide as GuideInfo);
+    }).catch(() => {
+      setMessage({ type: 'error', text: '无法连接到服务器' });
+    }).finally(() => setLoading(false));
+  }, [mode]);
 
-  const handleDelete = async () => {
-    try {
-      await fetch('/api/config/key', { method: 'DELETE' });
-      setMessage({ type: 'info', text: 'API Key 已清除' });
-      setStatus({ hasKey: false, source: 'none' });
-      setTestResult(null);
-    } catch {
-      setMessage({ type: 'error', text: '删除失败' });
-    }
-  };
-
-  const handleTestKey = async () => {
-    setTesting(true);
-    setTestResult(null);
-    try {
-      const res = await fetch('/api/agent/test-key', { method: 'POST' });
-      const data = await res.json();
-      setTestResult(data);
-      if (data.valid) {
-        setMessage({ type: 'success', text: 'API Key 有效！DeepSeek API 连接正常。' });
-      } else {
-        setMessage({ type: 'error', text: `Key 验证失败：${data.error}` });
-      }
-    } catch {
-      setTestResult({ valid: false, error: '网络错误' });
-      setMessage({ type: 'error', text: '无法测试 API Key' });
-    } finally {
-      setTesting(false);
-    }
-  };
+  useEffect(() => () => {
+    setApiKey('');
+    setMasterPassword('');
+  }, []);
 
   if (mode === 'public') {
     return (
       <div style={{ maxWidth: 600, margin: '0 auto' }}>
         <h2 className="section-title">配置</h2>
-        <div className="card">
-          配置页面仅在本地模式下可用。请在受信任的本地环境运行完整项目，并设置 <code>HARNESS_MODE=local</code>。
+        <div className="card" role="note">
+          配置页面仅在本地模式下可用。公网安全演示不接收或保存 API Key；请在本机运行完整项目并设置 <code>HARNESS_MODE=local</code>。
         </div>
       </div>
     );
   }
 
-  if (loading) {
-    return <div className="loading-text">加载配置中...</div>;
-  }
+  if (loading) return <div className="loading-text">加载配置中...</div>;
+
+  const state = status?.state ?? (status?.hasKey ? 'unlocked' : 'empty');
+  const needsMasterPassword = state === 'empty' || state === 'legacy';
+  const post = async (path: string, body?: unknown): Promise<Response> => fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+
+  const refreshStatus = async () => {
+    const response = await fetch('/api/config/status');
+    if (response.ok) setStatus(await response.json() as ConfigStatus);
+  };
+
+  const saveKey = async () => {
+    if (!apiKey.trim()) {
+      setMessage({ type: 'error', text: '请输入 API Key' });
+      return;
+    }
+    if (needsMasterPassword && !isPasswordValid(masterPassword)) {
+      setMessage({ type: 'error', text: '主密码需要 12-128 个字符' });
+      return;
+    }
+    try {
+      const response = await post('/api/config/key', {
+        key: apiKey.trim(),
+        ...(needsMasterPassword ? { masterPassword } : {}),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || '保存失败');
+      setApiKey('');
+      setMasterPassword('');
+      setMessage({ type: 'success', text: 'API Key 已安全保存' });
+      await refreshStatus();
+    } catch (error) {
+      setMessage({ type: 'error', text: error instanceof Error ? error.message : '保存失败' });
+    }
+  };
+
+  const unlock = async () => {
+    const response = await post('/api/config/unlock', { masterPassword });
+    if (response.ok) {
+      setMasterPassword('');
+      setMessage({ type: 'success', text: '凭据已解锁' });
+      await refreshStatus();
+    } else {
+      setMessage({ type: 'error', text: '主密码错误' });
+    }
+  };
+
+  const lock = async () => {
+    await post('/api/config/lock');
+    setApiKey('');
+    setMasterPassword('');
+    setMessage({ type: 'info', text: '凭据已锁定' });
+    await refreshStatus();
+  };
+
+  const clearKey = async () => {
+    const response = await fetch('/api/config/key', { method: 'DELETE' });
+    if (response.ok) {
+      setMessage({ type: 'info', text: 'API Key 已清除' });
+      await refreshStatus();
+    } else setMessage({ type: 'error', text: '清除失败，请先解锁凭据' });
+  };
+
+  const testKey = async () => {
+    setTesting(true);
+    try {
+      const response = await fetch('/api/agent/test-key', { method: 'POST' });
+      const data = await response.json();
+      setTestResult(data);
+      setMessage({ type: data.valid ? 'success' : 'error', text: data.valid ? 'API Key 连接正常' : `Key 验证失败：${data.error}` });
+    } catch {
+      setTestResult({ valid: false, error: '网络错误' });
+      setMessage({ type: 'error', text: '无法测试 API Key' });
+    } finally { setTesting(false); }
+  };
 
   return (
     <div style={{ maxWidth: 600, margin: '0 auto' }}>
       <h2 className="section-title">配置</h2>
-
-      {/* 状态卡片 */}
       <div className="card" style={{ marginBottom: 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontWeight: 600 }}>API Key 状态</span>
-          <span className={`badge ${status?.hasKey ? 'badge-completed' : 'badge-blocked'}`}>
-            {status?.hasKey ? '已配置' : '未设置'}
-          </span>
-        </div>
-        {status?.source === 'env' && (
-          <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 8 }}>
-            Key 从 DEEPSEEK_API_KEY 环境变量加载
-          </div>
-        )}
-        {status?.source === 'file' && (
-          <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 8 }}>
-            Key 已加密存储在本地文件中
-          </div>
-        )}
+        <strong>API Key 状态</strong>：{status?.hasKey ? '已配置' : '未配置'}（{state}）
+        {status?.source === 'env' && <div>Key 来自 DEEPSEEK_API_KEY 环境变量。</div>}
       </div>
-
-      {/* 引导卡片 */}
-      {guide && guide.needsSetup && (
-        <div className="card" style={{ marginBottom: 16, borderLeft: '3px solid var(--color-warning)' }}>
-          <div style={{ fontWeight: 600, marginBottom: 8 }}>首次使用引导</div>
-          <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
-            {guide.instructions.map((line, i) => (
-              <div key={i}>{line}</div>
-            ))}
+      {guide?.needsSetup && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          {guide.instructions.map((line) => <div key={line}>{line}</div>)}
+        </div>
+      )}
+      {state === 'locked' && (
+        <div className="card">
+          <label htmlFor="master-password">主密码</label>
+          <input id="master-password" className="input" type="password" value={masterPassword} onChange={(event) => setMasterPassword(event.target.value)} autoComplete="off" />
+          <button className="btn btn-primary" onClick={() => void unlock()} disabled={!masterPassword}>解锁凭据</button>
+        </div>
+      )}
+      {(state === 'empty' || state === 'legacy' || state === 'unlocked') && (
+        <div className="card">
+          <label htmlFor="deepseek-api-key">DeepSeek API Key</label>
+          <input id="deepseek-api-key" className="input" type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" />
+          {needsMasterPassword && <>
+            <label htmlFor="master-password">主密码（至少 12 个字符）</label>
+            <input id="master-password" className="input" type="password" value={masterPassword} onChange={(event) => setMasterPassword(event.target.value)} autoComplete="new-password" />
+          </>}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-primary" onClick={() => void saveKey()} disabled={!apiKey}>保存 Key</button>
+            {state === 'unlocked' && <>
+              <button className="btn btn-secondary" onClick={() => void testKey()} disabled={testing}>测试连接</button>
+              <button className="btn btn-secondary" onClick={() => void lock()}>锁定</button>
+              <button className="btn btn-danger" onClick={() => void clearKey()}>清除 Key</button>
+            </>}
           </div>
         </div>
       )}
-
-      {/* Key 输入卡片 */}
-      <div className="card" style={{ marginBottom: 16 }}>
-        <div style={{ fontWeight: 600, marginBottom: 8 }}>设置 API Key</div>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-          <input
-            className="input"
-            type={showKey ? 'text' : 'password'}
-            value={apiKey}
-            onChange={e => setApiKey(e.target.value)}
-            placeholder="输入你的 DeepSeek API Key"
-            style={{ fontFamily: showKey ? 'monospace' : undefined }}
-          />
-          <button
-            className="btn btn-secondary btn-sm"
-            onClick={() => setShowKey(!showKey)}
-            title={showKey ? '隐藏 Key' : '显示 Key'}
-          >
-            {showKey ? '隐藏' : '显示'}
-          </button>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-primary" onClick={handleSave} disabled={!apiKey.trim()}>
-            保存 Key
-          </button>
-          <button className="btn btn-secondary" onClick={handleTestKey} disabled={testing}>
-            {testing ? '测试中...' : '测试连接'}
-          </button>
-          {status?.hasKey && status?.source === 'file' && (
-            <button className="btn btn-danger" onClick={handleDelete}>
-              清除 Key
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* 测试结果 */}
-      {testResult && (
-        <div className="card" style={{ marginBottom: 16, borderLeft: `3px solid ${testResult.valid ? 'var(--color-success)' : 'var(--color-danger)'}` }}>
-          <div style={{ fontWeight: 600, color: testResult.valid ? 'var(--color-success)' : 'var(--color-danger)' }}>
-            {testResult.valid ? '✅ 连接成功' : '❌ 连接失败'}
-          </div>
-          {testResult.error && (
-            <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginTop: 4 }}>
-              {testResult.error}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* 提示消息 */}
-      {message && (
-        <div className="card" style={{
-          borderLeft: `3px solid ${
-            message.type === 'success' ? 'var(--color-success)' :
-            message.type === 'error' ? 'var(--color-danger)' : 'var(--color-info)'
-          }`,
-          fontSize: 13,
-          color: 'var(--color-text-secondary)',
-          marginBottom: 16,
-        }}>
-          {message.text}
-        </div>
-      )}
-
-      {/* 安全说明 */}
-      <div className="card" style={{ fontSize: 13, color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
-        <strong>凭据存储说明：</strong>
-        <ul style={{ marginTop: 8, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <li>Key 使用 AES-256-GCM 加密后写入磁盘</li>
-          <li>加密文件位置：<code>~/.harness/credentials.enc</code></li>
-          <li>加密密钥由你的机器主机名 + 用户名派生</li>
-          <li>生产环境建议使用 <code>DEEPSEEK_API_KEY</code> 环境变量</li>
-          <li>Key 不会写入日志、API 响应、或 Git 历史</li>
-        </ul>
+      {message && <div className="card" role="status">{message.text}</div>}
+      {testResult && <div className="card">{testResult.valid ? '连接成功' : `连接失败：${testResult.error ?? ''}`}</div>}
+      <div className="card" style={{ marginTop: 16 }}>
+        主密码只用于解锁本机加密凭据，不会写入浏览器或日志。忘记主密码后无法恢复密钥，只能清除并重新配置。
       </div>
     </div>
   );

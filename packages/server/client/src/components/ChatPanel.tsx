@@ -87,21 +87,6 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
   const isComplete = lastEvent?.type === 'complete';
   const feedbackRuns = events.filter((event) => event.type === 'feedback').map((event) => event.data);
 
-  // Auto-fill API key from server config when switching to BYOK mode
-  useEffect(() => {
-    if (experience !== 'byok' || !runtimeInfo.capabilities.allowServerCredentials) return;
-    let cancelled = false;
-    fetch('/api/config/key-value')
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (!cancelled && data?.key) {
-          setApiKey(data.key);
-        }
-      })
-      .catch(() => { /* silently ignore */ });
-    return () => { cancelled = true; };
-  }, [experience, runtimeInfo.capabilities.allowServerCredentials]);
-
   useEffect(() => {
     const allowed = runtimeInfo.capabilities.allowedExperiences;
     if (!allowed.includes(experience)) {

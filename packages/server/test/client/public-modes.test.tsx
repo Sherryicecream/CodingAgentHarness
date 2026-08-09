@@ -314,7 +314,7 @@ describe('server-session-first run flow', () => {
     });
 
     expect(FakeEventSource.instances).toHaveLength(0);
-    expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual(['/api/config/key-value']);
+    expect(fetchSpy.mock.calls.map(([url]) => url)).not.toContain('/api/config/key-value');
   });
 
   it('closes the previous stream before rebinding a retry to a new server session', async () => {
