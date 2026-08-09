@@ -141,7 +141,7 @@ describe('runtime-owned public and local surfaces', () => {
     expect(screen.getByRole('radio', { name: '使用自己的 API Key' })).toBeTruthy();
     expect(screen.getByText('进程工具：禁用')).toBeTruthy();
     expect(screen.getByText('服务器凭据：禁用')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '历史' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '历史' })).toBeNull();
     expect(screen.getByRole('button', { name: '配置' })).toBeTruthy();
   });
 
