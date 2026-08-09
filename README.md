@@ -95,8 +95,10 @@ cd packages/cli && npm run build && npm start
 # 构建镜像
 docker build -t harness .
 
-# 运行容器
-docker run -d -p 3000:3000 -e DEEPSEEK_API_KEY=your_key_here harness
+# 运行容器（不要把真实 Key 直接写进命令行或 shell 历史）
+# 先在受限权限文件中保存 KEY，再通过 --env-file 注入
+Set-Content -Path .\harness.env -Value 'DEEPSEEK_API_KEY=replace-with-your-key'
+docker run -d -p 3000:3000 --env-file .\harness.env harness
 
 # 打开 http://localhost:3000
 ```
@@ -350,10 +352,11 @@ API Key 绝不会：
 ### Docker（推荐用于云部署）
 
 ```bash
-# 构建并运行
+# 构建并运行。生产环境建议使用权限受限的 env 文件或平台 Secret，
+# 不要把真实 API Key 写在命令行、Dockerfile、Compose 文件或 Git 中。
 docker build -t harness .
 docker run -d -p 3000:3000 \
-  -e DEEPSEEK_API_KEY=your_key_here \
+  --env-file ./harness.env \
   -e NODE_ENV=production \
   harness
 ```
@@ -369,7 +372,8 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
-      - DEEPSEEK_API_KEY=your_key_here
+    env_file:
+      - ./harness.env
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
