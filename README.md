@@ -41,7 +41,7 @@ harness/
 
 ```bash
 # 安装依赖
-npm install
+npm ci
 
 # 构建所有包
 npm run build
@@ -63,7 +63,7 @@ npm test --workspace @harness/core -- demo
 npm test --workspace @harness/server -- public-demo
 ```
 
-公开模式下，浏览器的“对话 / 历史 / 配置”三个页面都会保留；公开模式的历史记录保存在当前浏览器本地，不会上传 API Key。
+公开模式下，浏览器仍会显示“对话 / 历史 / 配置”三个页面；其中“使用自己的 API Key”和“本地服务器凭据”仅作说明，不能选择。公开模式的历史记录保存在当前浏览器本地；托管的公网 WebUI 不接收、存储或使用 API Key。
 
 ### Windows PowerShell 启动
 
@@ -78,9 +78,16 @@ $env:HARNESS_MODE = "local"
 $env:HOST = "127.0.0.1"
 $env:PORT = "3000"
 npm.cmd start
+Start-Process http://127.0.0.1:3000
 ```
 
-然后访问 http://127.0.0.1:3000。云服务器公开演示应使用 `HARNESS_MODE=public`，并绑定 `HOST=0.0.0.0`；不要在公网暴露 `local` 模式。
+云服务器公开演示应使用 `HARNESS_MODE=public`，并绑定 `HOST=0.0.0.0`；不要在公网暴露 `local` 模式。
+
+### 公网演示与本地完整版本
+
+托管的公网 WebUI 仅运行确定性的安全演示（`demo`）：不调用真实 LLM，也绝不接收、存储或使用 API Key。它会展示三个体验入口，但只启用 `demo`。
+
+要使用真实 API，必须在本机运行完整项目并绑定到 `localhost` 或 `127.0.0.1`。本地用户可以选择“使用自己的 API Key”，或选择“本地服务器凭据”；后者由本地用户在配置页中配置、更新和清除。回环地址上的本地使用不需要 HTTPS 隧道。
 
 ### 使用 CLI
 
@@ -95,10 +102,8 @@ cd packages/cli && npm run build && npm start
 # 构建镜像
 docker build -t harness .
 
-# 运行容器（不要把真实 Key 直接写进命令行或 shell 历史）
-# 先在受限权限文件中保存 KEY，再通过 --env-file 注入
-Set-Content -Path .\harness.env -Value 'DEEPSEEK_API_KEY=replace-with-your-key'
-docker run -d -p 3000:3000 --env-file .\harness.env harness
+# 运行托管的确定性公网演示；该模式不接收或使用 API Key
+docker run -d -p 3000:3000 -e HARNESS_MODE=public harness
 
 # 打开 http://localhost:3000
 ```
@@ -261,40 +266,27 @@ Harness 支持两种运行模式，通过 `HARNESS_MODE` 环境变量控制：
 
 | 模式 | 值 | 说明 |
 |------|-----|------|
-| **公开安全模式** | `public` | 匿名演示 + 受限 BYOK，仅文件工具，无法执行 Shell/Git/进程测试 |
+| **公开安全模式** | `public` | 托管的确定性安全演示，仅启用 `demo`；不接收、存储或使用 API Key，无法执行 Shell/Git/进程测试 |
 | **本地可信模式** | `local` | 完整工具集，支持服务器凭据管理，可执行 Shell/Git/进程测试 |
 
 `HARNESS_MODE` 未设置或设置为无效值时，默认解析为 `public` 模式。
 
 ### 模式能力对比
 
-| 能力 | 公开演示 | 公开 BYOK | 本地 |
-|------|---------|-----------|------|
-| `read_file` | ✅ | ✅ | ✅ |
-| `write_file` | ✅ | ✅ | ✅ |
-| `search_code` | ✅ | ✅ | ✅ |
-| `execute_shell` | ❌ | ❌ | ✅ |
-| `run_tests` | ❌ | ❌ | ✅ |
-| `git_diff` | ❌ | ❌ | ✅ |
-| `git_commit` | ❌ | ❌ | ✅ |
-| 服务器凭据管理 | ❌ | ❌ | ✅ |
-| 历史会话 | ❌ | ❌ | ✅ |
-| 配置页 | ❌ | ❌ | ✅ |
+| 能力 | 公网演示（`demo`） | 本地“使用自己的 API Key”（`byok`） | 本地“本地服务器凭据”（`server`） |
+|------|-------------------|-------------------------------------|------------------------------------|
+| 运行位置 | 托管公网 WebUI | 本机完整项目（`localhost` 或 `127.0.0.1`） | 本机完整项目（`localhost` 或 `127.0.0.1`） |
+| 真实 LLM | ❌ | ✅ | ✅ |
+| 接收、存储或使用 API Key | ❌ | 本地用户在当前运行中提供 | 本地配置的服务器凭据 |
+| `read_file`、`write_file`、`search_code` | ✅ | ✅ | ✅ |
+| `execute_shell`、`run_tests`、`git_diff`、`git_commit` | ❌ | ✅ | ✅ |
+| 本地配置页 | 仅显示本地运行说明，不请求配置 API | ✅ | ✅ |
 
-### BYOK 安全要求
+公网页面会显示三个体验入口，但 `byok` 与 `server` 始终禁用并说明必须在本地运行完整项目；服务器仍是权限的最终裁决者。
 
-公开 BYOK（使用自己的 API Key）必须满足以下条件：
+### 本地 API 使用与凭据
 
-- **HTTPS 要求**：生产环境必须通过 HTTPS 访问。HTTP 下 BYOK 被禁用，仅显示说明信息。
-- **开发例外**：`localhost`、`127.0.0.1`、`::1` 等 loopback 地址可在 HTTP 下开发调试。
-- **Key 生命周期**：API Key 仅存在于浏览器组件内存中，通过本次请求发送。Key 在以下情况均被清除：
-  - 运行成功完成
-  - 运行失败或发生错误
-  - SSE 连接超时或中断
-  - 用户切换体验模式
-  - 组件卸载
-- **Key 永不持久化**：不写入 localStorage、sessionStorage、URL、日志、分析工具或全局状态。
-- **Key 不回显**：Key 不会出现在验证/错误提示文本中。
+本地用户可选择“使用自己的 API Key”，也可选择“本地服务器凭据”。前者只在本地会话的浏览器内存中使用，不写入 localStorage、sessionStorage、URL、日志、分析工具或全局状态，也不会在错误提示中回显；后者可由本地用户在配置页配置、更新和清除。
 
 ### 公开演示的特殊行为
 
@@ -312,7 +304,7 @@ Harness 支持两种运行模式，通过 `HARNESS_MODE` 环境变量控制：
 | `PORT` | `3000` | HTTP 监听端口 |
 | `HOST` | `0.0.0.0` | HTTP 监听地址 |
 | `DEEPSEEK_API_KEY` | — | 服务端 DeepSeek API Key（本地模式） |
-| `TRUST_PROXY` | `0` | 反向代理信任跳数（用于 HTTPS 检测） |
+| `HARNESS_TRUST_PROXY` | `0` | 反向代理信任配置 |
 | `RATE_LIMIT_MAX` | `20` | 每小时每 IP 最大运行尝试次数 |
 | `RATE_LIMIT_WINDOW` | `3600000` | 速率限制窗口（毫秒） |
 | `CONCURRENT_MAX` | `2` | 每 IP 最大并发运行数 |
@@ -327,6 +319,8 @@ POST /api/agent/run               → { sessionId, task, mode, apiKey? }
 
 严格顺序：session 创建 → SSE 连接 → 运行提交。客户端不生成 session ID，不发送 workingDir。
 
+`apiKey` 仅在本地 `byok` 会话中允许；公网 `public` 会话只允许 `demo`，不会接受 API Key。
+
 ### 威胁模型
 
 - **范围内**：从文件系统窃取凭据、日志泄露、Git 暴露、浏览器 XSS 读取 Key、CSRF 未授权运行
@@ -334,14 +328,14 @@ POST /api/agent/run               → { sessionId, task, mode, apiKey? }
 
 ### 凭据存储（本地模式）
 
-API Key 使用 AES-256-GCM 加密后存储在本地文件系统中：
+本地服务器凭据使用 AES-256-GCM 加密后存储在本地文件系统中：
 - **加密文件**：`~/.harness/credentials.enc`
 - **加密密钥**：由机器主机名 + 操作系统用户名派生
 - **环境变量**：`DEEPSEEK_API_KEY`（生产部署用，优先级高于文件存储）
 
-API Key 绝不会：
+本地服务器凭据绝不会：
 - 硬编码在源代码中
-- 写入日志或文件
+- 写入日志或未加密文件
 - 包含在 Git 提交中
 - 在 API 响应中暴露（状态端点仅返回 `hasKey: boolean`）
 
@@ -349,15 +343,14 @@ API Key 绝不会：
 
 ## 部署
 
-### Docker（推荐用于云部署）
+### Docker（托管公网演示）
 
 ```bash
-# 构建并运行。生产环境建议使用权限受限的 env 文件或平台 Secret，
-# 不要把真实 API Key 写在命令行、Dockerfile、Compose 文件或 Git 中。
+# 构建并运行托管的确定性演示。它不接收、存储或使用 API Key。
 docker build -t harness .
 docker run -d -p 3000:3000 \
-  --env-file ./harness.env \
   -e NODE_ENV=production \
+  -e HARNESS_MODE=public \
   harness
 ```
 
@@ -372,8 +365,7 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
-    env_file:
-      - ./harness.env
+      - HARNESS_MODE=public
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
