@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { FeedbackTimeline } from './FeedbackTimeline.js';
+import { loadPublicSessions } from '../history/public-history.js';
 
 export type SessionHistoryMode = 'public' | 'local';
 
@@ -26,6 +27,7 @@ export function SessionHistory({ mode }: { mode: SessionHistoryMode }) {
 
   useEffect(() => {
     if (mode === 'public') {
+      setSessions(loadPublicSessions());
       setLoading(false);
       return;
     }
@@ -52,14 +54,6 @@ export function SessionHistory({ mode }: { mode: SessionHistoryMode }) {
   }, [mode]);
 
   if (loading) return <div className="loading-text">加载会话列表...</div>;
-  if (mode === 'public') {
-    return (
-      <div>
-        <h2 className="section-title">历史会话</h2>
-        <div className="empty-text">公开安全模式不保存持久历史会话。</div>
-      </div>
-    );
-  }
   if (error) return <div className="event-error">错误：{error}</div>;
   if (sessions.length === 0) {
     return <div className="empty-text">暂无会话记录。请先在 Chat 页面运行一个任务。</div>;
