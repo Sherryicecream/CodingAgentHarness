@@ -24,8 +24,7 @@ export function App() {
     );
   }
 
-  const showHistory = runtimeInfo.mode === 'local';
-  const effectiveView = showHistory || view !== 'history' ? view : 'chat';
+  const effectiveView = view;
 
   return (
     <div className="app">
@@ -41,14 +40,12 @@ export function App() {
           >
             对话
           </button>
-          {showHistory && (
-            <button
-              className={`nav-tab ${effectiveView === 'history' ? 'active' : ''}`}
-              onClick={() => setView('history')}
-            >
-              历史
-            </button>
-          )}
+          <button
+            className={`nav-tab ${effectiveView === 'history' ? 'active' : ''}`}
+            onClick={() => setView('history')}
+          >
+            历史
+          </button>
           <button
             className={`nav-tab ${effectiveView === 'config' ? 'active' : ''}`}
             onClick={() => setView('config')}
@@ -59,7 +56,7 @@ export function App() {
       </header>
       {effectiveView === 'chat' ? (
         <ChatPanel runtimeInfo={runtimeInfo} acquireSession={acquireSession} />
-      ) : effectiveView === 'history' ? <SessionHistory /> : <ConfigPage />}
+      ) : effectiveView === 'history' ? <SessionHistory mode={runtimeInfo.mode} /> : <ConfigPage />}
     </div>
   );
 }

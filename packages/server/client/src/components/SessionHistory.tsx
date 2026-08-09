@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { FeedbackTimeline } from './FeedbackTimeline.js';
 
+export type SessionHistoryMode = 'public' | 'local';
+
 interface Session {
   id: string;
   createdAt: string;
@@ -16,13 +18,18 @@ interface Session {
   }>;
 }
 
-export function SessionHistory() {
+export function SessionHistory({ mode }: { mode: SessionHistoryMode }) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
+    if (mode === 'public') {
+      setLoading(false);
+      return;
+    }
+
     fetch('/api/sessions')
       .then(res => {
         if (res.status === 404) {
@@ -42,9 +49,17 @@ export function SessionHistory() {
         }
         setLoading(false);
       });
-  }, []);
+  }, [mode]);
 
   if (loading) return <div className="loading-text">加载会话列表...</div>;
+  if (mode === 'public') {
+    return (
+      <div>
+        <h2 className="section-title">历史会话</h2>
+        <div className="empty-text">公开安全模式不保存持久历史会话。</div>
+      </div>
+    );
+  }
   if (error) return <div className="event-error">错误：{error}</div>;
   if (sessions.length === 0) {
     return <div className="empty-text">暂无会话记录。请先在 Chat 页面运行一个任务。</div>;

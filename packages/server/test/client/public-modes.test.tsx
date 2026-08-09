@@ -141,7 +141,7 @@ describe('runtime-owned public and local surfaces', () => {
     expect(screen.getByRole('radio', { name: '使用自己的 API Key' })).toBeTruthy();
     expect(screen.getByText('进程工具：禁用')).toBeTruthy();
     expect(screen.getByText('服务器凭据：禁用')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: '历史' })).toBeNull();
+    expect(screen.getByRole('button', { name: '历史' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '配置' })).toBeTruthy();
   });
 
@@ -152,6 +152,16 @@ describe('runtime-owned public and local surfaces', () => {
     expect(screen.getByRole('button', { name: '历史' })).toBeTruthy();
     expect(screen.getByRole('radio', { name: '本地服务器凭据' })).toBeTruthy();
     expect(screen.getByText('进程工具：启用')).toBeTruthy();
+  });
+
+  it('keeps the public history page without requesting a private history endpoint', async () => {
+    const fetchSpy = installFetch(publicSession());
+    await renderLoadedApp();
+
+    await userEvent.click(screen.getByRole('button', { name: '历史' }));
+
+    expect(screen.getByText(/公开安全模式不保存持久历史/)).toBeTruthy();
+    expect(fetchSpy.mock.calls.some(([url]) => String(url) === '/api/sessions')).toBe(false);
   });
 
   it('shows the config page with a public-mode notice when navigating to /config', async () => {
