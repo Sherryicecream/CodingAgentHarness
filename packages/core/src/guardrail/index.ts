@@ -2,10 +2,12 @@ import { Guardrail, createGuardrail } from './guardrail.js';
 import { HITLManager, createHITLManager } from './hitl.js';
 import { RiskLevel, ToolCallRequest } from '../types.js';
 
+export type ToolAuthorization = 'allowed' | 'approved' | 'blocked';
+
 export interface GovernanceService {
   preCheck(toolCall: ToolCallRequest, riskLevel?: RiskLevel): boolean;
+  authorize(toolCall: ToolCallRequest, riskLevel?: RiskLevel): ToolAuthorization;
   isApprovedAction(toolCall: ToolCallRequest): boolean;
-  completeApprovedAction(toolCall: ToolCallRequest): void;
   postCheck(toolCall: ToolCallRequest): boolean;
   hitl: HITLManager;
 }
@@ -18,27 +20,27 @@ export function createGovernanceService(config?: { blockedCommands?: string[] })
     && hitl.pendingAction?.id === toolCall.id
     && hitl.pendingAction.name === toolCall.name
   );
+  const authorize = (toolCall: ToolCallRequest, riskLevel?: RiskLevel): ToolAuthorization => {
+    if (isApprovedAction(toolCall)) {
+      hitl.reset();
+      return 'approved';
+    }
+    const decision = guardrail.check(toolCall, riskLevel);
+    if (decision === 'blocked') {
+      hitl.requestApproval(toolCall);
+      return 'blocked';
+    }
+    return 'allowed';
+  };
 
   return {
     preCheck(toolCall: ToolCallRequest, riskLevel?: RiskLevel): boolean {
-      if (isApprovedAction(toolCall)) {
-        return true;
-      }
-      const decision = guardrail.check(toolCall, riskLevel);
-      if (decision === 'blocked') {
-        hitl.requestApproval(toolCall);
-        return false;
-      }
-      return true;
+      return authorize(toolCall, riskLevel) !== 'blocked';
     },
+
+    authorize,
 
     isApprovedAction,
-
-    completeApprovedAction(toolCall: ToolCallRequest): void {
-      if (isApprovedAction(toolCall)) {
-        hitl.reset();
-      }
-    },
 
     postCheck(_toolCall: ToolCallRequest): boolean {
       return true; // Reserved for future extensions

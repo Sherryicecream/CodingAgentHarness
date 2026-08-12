@@ -149,6 +149,23 @@ describe('ToolRegistry', () => {
 
       expect(executions).toBe(0);
     });
+
+    it('should consume an approved dangerous action after one execution', async () => {
+      const governance = createGovernanceService();
+      const registry = createToolRegistry(governance);
+      registry.register(makeMockTool('dangerous_echo_once', 'dangerous'));
+      const params = { command: 'echo hello' };
+      const context = { toolCallId: 'approved_once' };
+
+      await expect(registry.execute('dangerous_echo_once', params, context))
+        .rejects.toThrow(ToolApprovalRequiredError);
+      governance.hitl.approve();
+
+      await expect(registry.execute('dangerous_echo_once', params, context))
+        .resolves.toMatchObject({ success: true });
+      await expect(registry.execute('dangerous_echo_once', params, context))
+        .rejects.toThrow(ToolApprovalRequiredError);
+    });
   });
 
   describe('list', () => {

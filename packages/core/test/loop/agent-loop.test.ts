@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createAgentLoop, AgentLoop, AgentLoopDependencies } from '../../src/loop/agent-loop.js';
 import { MockLLMAdapter } from '../../src/llm/mock.js';
-import { createToolRegistry, ToolRegistry } from '../../src/tools/tool.js';
+import { createToolRegistry, ToolApprovalRequiredError, ToolRegistry } from '../../src/tools/tool.js';
 import { createGovernanceService, GovernanceService } from '../../src/guardrail/index.js';
 import { createContextBuilder, ContextBuilder } from '../../src/loop/context-builder.js';
 import { createStopCondition, StopCondition } from '../../src/loop/stop-condition.js';
@@ -389,6 +389,30 @@ describe('AgentLoop', () => {
 
   // ── Additional tests: abort and handleApproval ──
   describe('abort', () => {
+    it('clears an approved action that aborts before execution', async () => {
+      const tools = createToolRegistry();
+      tools.register(makeDangerousTool());
+      const governance = createGovernanceService({ blockedCommands: [] });
+      const loop = createAgentLoop(buildDeps({
+        llm: new MockLLMAdapter([makeResponse('Approval is required.', [
+          makeToolCall('abort-approved', 'execute_shell', { command: 'echo hello' }),
+        ])]),
+        tools,
+        governance,
+        feedback: makeMockFeedbackLoop(),
+        contextBuilder: createContextBuilder(),
+        stopCondition: createStopCondition(),
+      }));
+
+      await loop.run('Require approval then abort', '/tmp/test');
+      governance.hitl.approve();
+      loop.abort();
+
+      await expect(tools.execute('execute_shell', { command: 'echo hello' }, {
+        toolCallId: 'abort-approved',
+      })).rejects.toThrow(ToolApprovalRequiredError);
+    });
+
     it('should abort the loop mid-execution', async () => {
       const llm = new MockLLMAdapter([
         makeResponse('Processing...', [

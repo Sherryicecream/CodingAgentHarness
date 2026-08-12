@@ -50,11 +50,11 @@ export function createToolRegistry(governance: GovernanceService = createGoverna
       if (!tool) {
         throw new ToolNotFoundError(name);
       }
-      if (!executionGovernance.preCheck({
+      if (executionGovernance.authorize({
         id: context?.toolCallId ?? `tool:${name}`,
         name,
         arguments: params,
-      }, tool.riskLevel)) {
+      }, tool.riskLevel) === 'blocked') {
         throw new ToolApprovalRequiredError(name);
       }
       return tool.execute(params);

@@ -96,6 +96,7 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
     toolCall: ToolCallRequest,
   ): Promise<void> => {
     const startTime = Date.now();
+    const approvedByUser = deps.governance.isApprovedAction(toolCall);
     let result;
     try {
       deps.onEvent?.('tool_call', {
@@ -115,8 +116,6 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
     if (aborted) {
       return;
     }
-    const approvedByUser = deps.governance.isApprovedAction(toolCall);
-    deps.governance.completeApprovedAction(toolCall);
     deps.onEvent?.('tool_call', {
       name: toolCall.name,
       arguments: toolCall.arguments,
@@ -296,6 +295,7 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
     abort() {
       aborted = true;
       abortController.abort();
+      deps.governance.hitl.reset();
     },
   };
 }
