@@ -59,7 +59,7 @@ const createProjectMemoryStore = (workspace: string): MemoryStore => {
     add: async (entry) => (await store).add(entry),
     search: async (projectPath, query, options) => (await store).search(projectPath, query, options),
     list: async (projectPath) => (await store).list(projectPath),
-    delete: async (id) => (await store).delete(id),
+    delete: async (projectPath, id) => (await store).delete(projectPath, id),
     getByType: async (projectPath, type) => (await store).getByType(projectPath, type),
   };
 };

@@ -7,7 +7,7 @@ export interface MemoryStore {
   add(entry: Omit<MemoryEntry, 'id' | 'createdAt' | 'lastAccessedAt'>): Promise<MemoryEntry>;
   search(projectPath: string, query: string, options?: { type?: string; limit?: number }): Promise<MemoryEntry[]>;
   list(projectPath: string): Promise<MemoryEntry[]>;
-  delete(id: string): Promise<void>;
+  delete(projectPath: string, id: string): Promise<void>;
   getByType(projectPath: string, type: MemoryEntry['type']): Promise<MemoryEntry[]>;
 }
 
@@ -124,8 +124,8 @@ export async function createMemoryStore(dbPath: string): Promise<MemoryStore> {
     return Promise.resolve(rows.map(rowToEntry));
   }) as MemoryStore['list'];
 
-  const _delete = ((id: string): Promise<void> => {
-    db.run('DELETE FROM memories WHERE id = ?', [id]);
+  const _delete = ((projectPath: string, id: string): Promise<void> => {
+    db.run('DELETE FROM memories WHERE id = ? AND project_path = ?', [id, projectPath]);
     saveDb();
     return Promise.resolve();
   }) as MemoryStore['delete'];
