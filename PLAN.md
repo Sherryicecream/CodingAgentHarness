@@ -21,7 +21,7 @@
 | 5 | 隔离本地凭据文件并验证完整生命周期 | `61bed5f` | focused lifecycle 1/1、Server 185/185、Server build 通过 | 已闭合 |
 | 6 | 对齐五份交付文档并增加一致性扫描 | `874f29f` | scanner 10/10、五份文档扫描通过 | 已闭合 |
 | 7 | CI 构建与 package entry 可复现验证 | `714b078` | CI contract 2/2、package verifier 3/3、build 通过；root test 超过 240 秒后终止 | 已闭合 |
-| 8 | 最终验证、学生反思清单与发布边界 | 本提交（验证基线 `714b078`） | Core 297、Server 185、build、demo/mechanism、凭据与 package 检查通过；CLI clean-install 自动证据仍超时 | 部分闭合 |
+| 8 | 最终验证、学生反思清单与发布边界 | 本提交（验证基线 `714b078`） | Core 297、Server 185、build、demo/mechanism、凭据与 package 检查通过；完整 CLI suite 无输出超过 240 秒并终止，自动 Windows install/start/WebUI/cleanup 仍未验证 | 部分闭合 |
 
 ## Task 1：危险工具治理
 

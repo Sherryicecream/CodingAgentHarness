@@ -78,7 +78,7 @@
 - **过程技能/上下文**：executing-plans、verification-before-completion、code-review-and-quality 与 Git hygiene；没有产品代码改动，因此没有制造 RED→GREEN。
 - **结果**：Core 31 files/297 tests、Server 20 files/185 tests、Core demo 6/6、Server demo 17/17、HITL/feedback/memory focused 62/62、credential focused 3/3、三个 production builds、package verifier 和文档 scanner 均退出 0。实际临时 tarball 为 Core 3、Server 9、CLI 2 个条目，required entries 全在且敏感/仓库条目扫描为 0。
 - **证据间隙**：完整 CLI suite 无输出运行超过 240 秒后被终止；两个非安装 CLI 检查 2/2 通过但带现有 `DEP0190` warning。Task 4 用户提供的一次人工 clean-install 成功仍只算人工证据，自动 Windows install/start/cleanup 未闭合。
-- **安全审查**：HEAD 历史 126 个 commits 的高置信秘密模式命中只位于五个测试路径；当前生产代码/受控交付文档未发现真实秘密。`git diff --check 0fb39b8..714b078` 仅报告已提交 Task 7 SDD report 的 EOF 空行，属于非阻断文档 nit。
+- **安全审查**：verification baseline `714b078` history: 126 commits；高置信秘密模式命中只位于五个测试路径，当前生产代码/受控交付文档未发现真实秘密。`git diff --check 0fb39b8..714b078` 仅报告已提交 Task 7 SDD report 的 EOF 空行，属于非阻断文档 nit。
 - **学生材料**：`REFLECTION.md` 只读计数为 2,696 个汉字（上限 2,500），无 Markdown headings，并含未核验部署/历史数字与若干文字问题；只更新 ignored checklist，不改正文。`submission.jsonc` 只读确认仍为 `is_deployed: true` 和现有公网地址，本轮未访问、验证或修改。
 - **外部边界**：没有 push、PR、npm publish、GitHub Release、submission URL 变更或真实凭据操作；任何 Release/提交修改仍需精确外部授权。
 
