@@ -85,8 +85,8 @@ describe('ToolRegistry', () => {
     });
 
     it('should request approval before executing a dangerous tool with a harmless command', async () => {
-      const registry = createToolRegistry();
       const governance = createGovernanceService();
+      const registry = createToolRegistry(governance);
       let executions = 0;
       registry.register({
         ...makeMockTool('dangerous_echo', 'dangerous'),
@@ -99,7 +99,7 @@ describe('ToolRegistry', () => {
       await expect(registry.execute(
         'dangerous_echo',
         { command: 'echo hello' },
-        { governance, toolCallId: 'dangerous_echo_1' },
+        { toolCallId: 'dangerous_echo_1' },
       )).rejects.toThrow(ToolApprovalRequiredError);
 
       expect(executions).toBe(0);
@@ -109,6 +109,25 @@ describe('ToolRegistry', () => {
         name: 'dangerous_echo',
         arguments: { command: 'echo hello' },
       });
+    });
+
+    it('should require approval by default before executing a dangerous tool', async () => {
+      const registry = createToolRegistry();
+      let executions = 0;
+      registry.register({
+        ...makeMockTool('dangerous_echo_default', 'dangerous'),
+        async execute(): Promise<ToolResult> {
+          executions += 1;
+          return { success: true, output: 'hello' };
+        },
+      });
+
+      await expect(registry.execute(
+        'dangerous_echo_default',
+        { command: 'echo hello' },
+      )).rejects.toThrow(ToolApprovalRequiredError);
+
+      expect(executions).toBe(0);
     });
   });
 

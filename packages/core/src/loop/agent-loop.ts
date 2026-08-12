@@ -9,7 +9,7 @@ import type {
   ToolCallRequest,
 } from '../types.js';
 import type { LLMAdapter } from '../llm/adapter.js';
-import type { ToolRegistry } from '../tools/tool.js';
+import { ToolApprovalRequiredError, type ToolRegistry } from '../tools/tool.js';
 import type { GovernanceService } from '../guardrail/index.js';
 import type { FeedbackLoop } from '../feedback/feedback-loop.js';
 import type { ContextBuilder } from './context-builder.js';
@@ -61,6 +61,7 @@ const isTestCommand = (command: string): boolean => {
 };
 
 export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
+  deps.tools.setGovernance(deps.governance);
   let aborted = false;
   const abortController = new AbortController();
   let currentState: ExecutionState | null = null;
@@ -103,8 +104,14 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
         arguments: toolCall.arguments,
         status: 'running',
       });
-      result = await deps.tools.execute(toolCall.name, toolCall.arguments);
+      result = await deps.tools.execute(toolCall.name, toolCall.arguments, {
+        toolCallId: toolCall.id,
+        approvedByUser,
+      });
     } catch (error: any) {
+      if (error instanceof ToolApprovalRequiredError) {
+        throw error;
+      }
       result = { success: false, output: '', error: error.message };
     }
     if (aborted) {
@@ -216,15 +223,16 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
         }
         const toolCall = response.toolCalls[index]!;
         const approvedByUser = bypassGuardrail && index === firstToolIndex;
-        if (!approvedByUser && !deps.governance.preCheck(
-          toolCall,
-          deps.tools.get(toolCall.name)?.riskLevel,
-        )) {
+        try {
+          await executeToolCall(state, toolCall, approvedByUser);
+        } catch (error) {
+          if (!(error instanceof ToolApprovalRequiredError)) {
+            throw error;
+          }
           state.pending = { response, parsed, toolIndex: index };
           deps.onEvent?.('guardrail', { toolCall, decision: 'blocked' });
           return finish(state, 'blocked');
         }
-        await executeToolCall(state, toolCall, approvedByUser);
         if (aborted) {
           return finish(state, 'failed');
         }
