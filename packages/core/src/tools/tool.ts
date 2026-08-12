@@ -17,7 +17,6 @@ export class ToolApprovalRequiredError extends Error {
 
 export interface ToolExecutionContext {
   toolCallId?: string;
-  approvedByUser?: boolean;
 }
 
 export interface ToolRegistry {
@@ -51,7 +50,7 @@ export function createToolRegistry(governance: GovernanceService = createGoverna
       if (!tool) {
         throw new ToolNotFoundError(name);
       }
-      if (!context?.approvedByUser && !executionGovernance.preCheck({
+      if (!executionGovernance.preCheck({
         id: context?.toolCallId ?? `tool:${name}`,
         name,
         arguments: params,

@@ -94,7 +94,6 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
   const executeToolCall = async (
     state: ExecutionState,
     toolCall: ToolCallRequest,
-    approvedByUser: boolean,
   ): Promise<void> => {
     const startTime = Date.now();
     let result;
@@ -106,7 +105,6 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
       });
       result = await deps.tools.execute(toolCall.name, toolCall.arguments, {
         toolCallId: toolCall.id,
-        approvedByUser,
       });
     } catch (error: any) {
       if (error instanceof ToolApprovalRequiredError) {
@@ -117,6 +115,8 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
     if (aborted) {
       return;
     }
+    const approvedByUser = deps.governance.isApprovedAction(toolCall);
+    deps.governance.completeApprovedAction(toolCall);
     deps.onEvent?.('tool_call', {
       name: toolCall.name,
       arguments: toolCall.arguments,
@@ -178,19 +178,15 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
 
   const drive = async (
     state: ExecutionState,
-    approvedPendingAction = false,
   ): Promise<AgentLoopResult> => {
     while (!aborted) {
       let response: AgentResponse;
       let parsed: ReturnType<typeof parseResponse>;
       let firstToolIndex = 0;
-      let bypassGuardrail = false;
 
       if (state.pending) {
         ({ response, parsed, toolIndex: firstToolIndex } = state.pending);
         state.pending = null;
-        bypassGuardrail = approvedPendingAction;
-        approvedPendingAction = false;
       } else {
         const context = deps.contextBuilder.build({
           task: state.task,
@@ -222,9 +218,8 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
           return finish(state, 'failed');
         }
         const toolCall = response.toolCalls[index]!;
-        const approvedByUser = bypassGuardrail && index === firstToolIndex;
         try {
-          await executeToolCall(state, toolCall, approvedByUser);
+          await executeToolCall(state, toolCall);
         } catch (error) {
           if (!(error instanceof ToolApprovalRequiredError)) {
             throw error;
@@ -289,8 +284,7 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
         return finish(state, 'failed');
       }
       deps.governance.hitl.approve();
-      deps.governance.hitl.reset();
-      return drive(state, true);
+      return drive(state);
     },
 
     handleApproval(approved) {

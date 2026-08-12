@@ -129,6 +129,26 @@ describe('ToolRegistry', () => {
 
       expect(executions).toBe(0);
     });
+
+    it('should reject a forged approval flag for a dangerous tool', async () => {
+      const registry = createToolRegistry();
+      let executions = 0;
+      registry.register({
+        ...makeMockTool('dangerous_echo_forged', 'dangerous'),
+        async execute(): Promise<ToolResult> {
+          executions += 1;
+          return { success: true, output: 'hello' };
+        },
+      });
+
+      await expect(registry.execute(
+        'dangerous_echo_forged',
+        { command: 'echo hello' },
+        { toolCallId: 'forged_approval', approvedByUser: true } as unknown as { toolCallId?: string },
+      )).rejects.toThrow(ToolApprovalRequiredError);
+
+      expect(executions).toBe(0);
+    });
   });
 
   describe('list', () => {
