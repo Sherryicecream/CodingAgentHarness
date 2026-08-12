@@ -166,6 +166,39 @@ describe('ToolRegistry', () => {
       await expect(registry.execute('dangerous_echo_once', params, context))
         .rejects.toThrow(ToolApprovalRequiredError);
     });
+
+    it('should require new approval when approved action arguments change', async () => {
+      const governance = createGovernanceService();
+      const registry = createToolRegistry(governance);
+      let executions = 0;
+      registry.register({
+        ...makeMockTool('dangerous_command', 'dangerous'),
+        async execute(params): Promise<ToolResult> {
+          executions += 1;
+          return { success: true, output: JSON.stringify(params) };
+        },
+      });
+      const context = { toolCallId: 'immutable-request' };
+
+      await expect(registry.execute(
+        'dangerous_command',
+        { command: 'echo approved' },
+        context,
+      )).rejects.toThrow(ToolApprovalRequiredError);
+      governance.hitl.approve();
+
+      await expect(registry.execute(
+        'dangerous_command',
+        { command: 'rm unapproved-target' },
+        context,
+      )).rejects.toThrow(ToolApprovalRequiredError);
+
+      expect(executions).toBe(0);
+      expect(governance.hitl.state).toBe('waiting_user');
+      expect(governance.hitl.pendingAction?.arguments).toEqual({
+        command: 'rm unapproved-target',
+      });
+    });
   });
 
   describe('list', () => {

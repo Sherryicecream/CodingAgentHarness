@@ -104,6 +104,9 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
         arguments: toolCall.arguments,
         status: 'running',
       });
+      if (aborted) {
+        return;
+      }
       result = await deps.tools.execute(toolCall.name, toolCall.arguments, {
         toolCallId: toolCall.id,
       });

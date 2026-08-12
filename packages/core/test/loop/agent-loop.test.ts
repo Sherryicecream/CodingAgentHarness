@@ -389,6 +389,48 @@ describe('AgentLoop', () => {
 
   // ── Additional tests: abort and handleApproval ──
   describe('abort', () => {
+    it('does not request approval after aborting from the running event', async () => {
+      let executions = 0;
+      const dangerousTool = makeDangerousTool();
+      const tools = createToolRegistry();
+      tools.register({
+        ...dangerousTool,
+        async execute(params) {
+          executions += 1;
+          return dangerousTool.execute(params);
+        },
+      });
+      const governance = createGovernanceService({ blockedCommands: [] });
+      let loop!: AgentLoop;
+      loop = createAgentLoop({
+        ...buildDeps({
+          llm: new MockLLMAdapter([makeResponse('Approval is required.', [
+            makeToolCall('abort-running', 'execute_shell', { command: 'echo hello' }),
+          ])]),
+          tools,
+          governance,
+          feedback: makeMockFeedbackLoop(),
+          contextBuilder: createContextBuilder(),
+          stopCondition: createStopCondition(),
+        }),
+        onEvent(type, data) {
+          if (type === 'tool_call' && data.status === 'running') {
+            loop.abort();
+          }
+        },
+      });
+
+      const result = await loop.run('Abort before authorization', '/tmp/test');
+
+      expect(result.status).toBe('failed');
+      expect(executions).toBe(0);
+      expect(governance.hitl.state).toBe('running');
+      expect(governance.hitl.pendingAction).toBeNull();
+      await expect(loop.continueAfterApproval(true)).rejects.toThrow(
+        'Agent loop has no blocked action to continue',
+      );
+    });
+
     it('clears an approved action that aborts before execution', async () => {
       const tools = createToolRegistry();
       tools.register(makeDangerousTool());
