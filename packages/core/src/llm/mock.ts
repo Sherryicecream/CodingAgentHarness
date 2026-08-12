@@ -1,6 +1,10 @@
 import { LLMAdapter } from './adapter.js';
 import { AgentContext, AgentResponse } from '../types.js';
 
+export type MockLLMResponseSelector = (
+  context: AgentContext,
+) => AgentResponse | undefined;
+
 export class MockLLMExhaustedError extends Error {
   constructor() {
     super('MockLLMAdapter: no more responses available');
@@ -10,10 +14,17 @@ export class MockLLMExhaustedError extends Error {
 
 export class MockLLMAdapter implements LLMAdapter {
   private index = 0;
+  readonly receivedContexts: AgentContext[] = [];
 
-  constructor(private responses: AgentResponse[]) {}
+  constructor(private responses: AgentResponse[] | MockLLMResponseSelector) {}
 
-  async sendMessage(_context: AgentContext): Promise<AgentResponse> {
+  async sendMessage(context: AgentContext): Promise<AgentResponse> {
+    this.receivedContexts.push(context);
+    if (typeof this.responses === 'function') {
+      const response = this.responses(context);
+      if (!response) throw new MockLLMExhaustedError();
+      return response;
+    }
     if (this.index >= this.responses.length) {
       throw new MockLLMExhaustedError();
     }
@@ -22,6 +33,6 @@ export class MockLLMAdapter implements LLMAdapter {
 
   /** Returns the number of remaining unconsumed responses */
   get remainingCount(): number {
-    return this.responses.length - this.index;
+    return Array.isArray(this.responses) ? this.responses.length - this.index : 0;
   }
 }

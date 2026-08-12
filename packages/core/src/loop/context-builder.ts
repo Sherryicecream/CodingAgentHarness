@@ -36,9 +36,19 @@ export function createContextBuilder(systemPrompt?: string): ContextBuilder {
 
       // Inject feedback state
       if (options.feedbackState) {
+        const { lastResult } = options.feedbackState;
         messages.push({
           role: 'system',
-          content: `Previous test run failed (iteration ${options.feedbackState.iteration}). Please fix the code.`,
+          content: [
+            `Previous test run failed (iteration ${options.feedbackState.iteration}).`,
+            'Structured feedback:',
+            JSON.stringify({
+              status: lastResult.status,
+              failures: lastResult.failures,
+              actionableFix: lastResult.actionableFix,
+            }),
+            'Use the actionable fix to choose the next action.',
+          ].join('\n'),
         });
       }
 
