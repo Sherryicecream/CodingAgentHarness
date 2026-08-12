@@ -5,7 +5,9 @@
   "workspaces": ["packages/*"],
   "scripts": {
     "test": "npm run test --workspaces --if-present",
-    "build": "npm run build --workspaces --if-present"
+    "build": "npm run build --workspaces --if-present",
+    "check:docs": "node scripts/check-document-consistency.mjs",
+    "test:docs": "node --test scripts/check-document-consistency.test.mjs"
   },
   "devDependencies": {
     "typescript": "^5.5.0"
