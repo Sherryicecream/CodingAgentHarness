@@ -4,7 +4,11 @@ import { createResultParser } from '../../src/feedback/result-parser.js';
 import { createFailureClassifier } from '../../src/feedback/failure-classifier.js';
 import { createFixSuggestionBuilder } from '../../src/feedback/fix-suggestion.js';
 import { createFeedbackLoop } from '../../src/feedback/feedback-loop.js';
-import { MockLLMAdapter } from '../../src/llm/mock.js';
+import {
+  MockLLMAdapter,
+  MockLLMExhaustedError,
+  type MockLLMSelectorContext,
+} from '../../src/llm/mock.js';
 import { createAgentLoop } from '../../src/loop/agent-loop.js';
 import { createContextBuilder } from '../../src/loop/context-builder.js';
 import { createStopCondition } from '../../src/loop/stop-condition.js';
@@ -12,8 +16,8 @@ import { createToolRegistry } from '../../src/tools/tool.js';
 import { createGovernanceService } from '../../src/guardrail/index.js';
 import type {
   AgentResponse,
-  FeedbackState,
   MemoryStore,
+  Message,
   Tool,
   ToolResult,
 } from '../../src/types.js';
@@ -36,6 +40,43 @@ const runTestsTool: Tool = {
   riskLevel: 'safe',
   execute: async (): Promise<ToolResult> => ({ success: true, output: 'demo test executed' }),
 };
+
+const structuredFeedbackMarker = 'Structured feedback:\n';
+const structuredFeedbackSuffix = '\nUse the actionable fix to choose the next action.';
+const expectedSuggestedAction = '[medium] demo.ts:1 — greeting validation (assertion)';
+
+interface StructuredFeedback {
+  status: 'fail' | 'pass' | 'error';
+  failures: Array<{ file: string; line: number; type: string }>;
+  actionableFix: {
+    summary: string;
+    suggestedActions: string[];
+  } | null;
+}
+
+const parseStructuredFeedback = (messages: Message[]): StructuredFeedback | null => {
+  const feedbackMessage = messages.find((message) => (
+    message.role === 'system' && message.content.includes(structuredFeedbackMarker)
+  ));
+  if (!feedbackMessage) return null;
+  const start = feedbackMessage.content.indexOf(structuredFeedbackMarker) + structuredFeedbackMarker.length;
+  const end = feedbackMessage.content.indexOf(structuredFeedbackSuffix, start);
+  if (end === -1) return null;
+  try {
+    return JSON.parse(feedbackMessage.content.slice(start, end)) as StructuredFeedback;
+  } catch {
+    return null;
+  }
+};
+
+const selectsGreetingCorrection = (feedback: StructuredFeedback | null): boolean => (
+  feedback?.status === 'fail'
+  && feedback.failures.some((failure) => (
+    failure.file === 'demo.ts' && failure.line === 1 && failure.type === 'assertion'
+  ))
+  && feedback.actionableFix?.summary === '1 test failure(s) detected.'
+  && feedback.actionableFix.suggestedActions.includes(expectedSuggestedAction)
+);
 
 describe('Feedback Demo (机制演示 ②)', () => {
   it('should detect test failure and feed back to LLM', async () => {
@@ -106,21 +147,24 @@ describe('Feedback Demo (机制演示 ②)', () => {
         return { success: true, output: 'recorded correction' };
       },
     };
-    const expectedFix = 'demo.ts:1';
-    const llm = new MockLLMAdapter(({ feedbackState }: { feedbackState: FeedbackState | null }) => {
-      if (!feedbackState) {
+    const selectResponse = ({ messages }: MockLLMSelectorContext): AgentResponse | undefined => {
+      const hasPriorTestAction = messages.some((message) => (
+        message.role === 'assistant' && message.content === 'Run the known failing greeting test.'
+      ));
+      if (!hasPriorTestAction) {
         return createResponse('Run the known failing greeting test.', [{
           id: 'first-test', name: 'run_tests', arguments: {},
         }]);
       }
-      if (feedbackState.lastResult.actionableFix?.suggestedActions.some((fix) => fix.includes(expectedFix))) {
+      if (selectsGreetingCorrection(parseStructuredFeedback(messages))) {
         return createResponse('Apply the observed greeting correction. TASK_COMPLETE', [
           { id: 'correct-greeting', name: 'write_file', arguments: { content: 'hello, harness' } },
           { id: 'second-test', name: 'run_tests', arguments: {} },
         ]);
       }
       return undefined;
-    });
+    };
+    const llm = new MockLLMAdapter(selectResponse);
     const tools = createToolRegistry();
     tools.register(runTestsTool);
     tools.register(writeFile);
@@ -152,10 +196,28 @@ describe('Feedback Demo (机制演示 ②)', () => {
       lastResult: {
         status: 'fail',
         failures: [{ file: 'demo.ts', type: 'assertion' }],
-        actionableFix: { suggestedActions: [expect.stringContaining(expectedFix)] },
+        actionableFix: { suggestedActions: [expectedSuggestedAction] },
       },
     });
-    expect(llm.receivedContexts[1]!.messages.map((message) => message.content).join('\n'))
-      .toContain(expectedFix);
+    const secondContext = llm.receivedContexts[1]!;
+    expect(parseStructuredFeedback(secondContext.messages)).toMatchObject({
+      failures: [{ file: 'demo.ts', line: 1, type: 'assertion' }],
+      actionableFix: {
+        summary: '1 test failure(s) detected.',
+        suggestedActions: [expectedSuggestedAction],
+      },
+    });
+
+    for (const messages of [
+      secondContext.messages.filter((message) => !message.content.includes(structuredFeedbackMarker)),
+      secondContext.messages.map((message) => ({
+        ...message,
+        content: message.content.replace(expectedSuggestedAction, 'unrelated fix'),
+      })),
+    ]) {
+      const adapter = new MockLLMAdapter(selectResponse);
+      await expect(adapter.sendMessage({ ...secondContext, messages })).rejects.toThrow(MockLLMExhaustedError);
+      expect(adapter.receivedContexts).toHaveLength(1);
+    }
   });
 });

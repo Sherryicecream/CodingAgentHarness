@@ -1,8 +1,10 @@
 import { LLMAdapter } from './adapter.js';
 import { AgentContext, AgentResponse } from '../types.js';
 
+export type MockLLMSelectorContext = Omit<AgentContext, 'feedbackState'>;
+
 export type MockLLMResponseSelector = (
-  context: AgentContext,
+  context: MockLLMSelectorContext,
 ) => AgentResponse | undefined;
 
 export class MockLLMExhaustedError extends Error {
@@ -21,7 +23,8 @@ export class MockLLMAdapter implements LLMAdapter {
   async sendMessage(context: AgentContext): Promise<AgentResponse> {
     this.receivedContexts.push(context);
     if (typeof this.responses === 'function') {
-      const response = this.responses(context);
+      const { feedbackState: _feedbackState, ...selectorContext } = context;
+      const response = this.responses(selectorContext);
       if (!response) throw new MockLLMExhaustedError();
       return response;
     }
