@@ -1,5 +1,6 @@
 import { isIP } from 'node:net';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import cors from 'cors';
 import express, { type Express } from 'express';
 import type { SessionStore } from '../../core/src/loop/session-store.js';
@@ -78,6 +79,7 @@ const disabledCredentialStore = (): CredentialStore => ({
 });
 
 const MAX_TIMER_MS = 2_147_483_647;
+const clientAssetsDirectory = join(dirname(fileURLToPath(import.meta.url)), 'client');
 
 const positiveIntegerFromEnvironment = (
   name: string,
@@ -264,9 +266,9 @@ export const createApp = (options: AppOptions = {}): HarnessApp => {
   app.get('/api/health', (_req, res) => res.json({ status: 'ok', mode: policy.mode }));
 
   if (process.env.NODE_ENV === 'production') {
-    app.use(express.static('dist/client'));
+    app.use(express.static(clientAssetsDirectory));
     app.get('*', (_req, res) => {
-      res.sendFile('dist/client/index.html', { root: '.' });
+      res.sendFile('index.html', { root: clientAssetsDirectory });
     });
   }
 
