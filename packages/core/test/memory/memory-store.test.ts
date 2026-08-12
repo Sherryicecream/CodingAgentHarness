@@ -217,7 +217,7 @@ describe('MemoryStore', () => {
       expect(after).toHaveLength(0);
     });
 
-    it('should not delete a different project\'s memory', async () => {
+    it('should not delete a different project\'s memory when given its id', async () => {
       const entryA = await store.add({
         type: 'convention',
         content: 'Project A deletion target',
@@ -231,9 +231,9 @@ describe('MemoryStore', () => {
         projectPath: '/project/b',
       });
 
-      await store.delete('/project/a', entryA.id);
+      await store.delete('/project/a', entryB.id);
 
-      await expect(store.list('/project/a')).resolves.toEqual([]);
+      await expect(store.list('/project/a')).resolves.toMatchObject([{ id: entryA.id }]);
       await expect(store.list('/project/b')).resolves.toMatchObject([{ id: entryB.id }]);
     });
   });
