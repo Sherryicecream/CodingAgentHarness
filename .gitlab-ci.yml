@@ -7,3 +7,5 @@ unit-test:
   script:
     - npm ci
     - npm test
+    - npm run build
+    - npm run verify:packages

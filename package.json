@@ -4,8 +4,9 @@
   "private": true,
   "workspaces": ["packages/*"],
   "scripts": {
-    "test": "npm run test --workspaces --if-present",
+    "test": "node --test scripts/check-ci-config.test.mjs && npm run test --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
+    "verify:packages": "node scripts/verify-packages.mjs",
     "check:docs": "node scripts/check-document-consistency.mjs",
     "test:docs": "node --test scripts/check-document-consistency.test.mjs"
   },
