@@ -3,6 +3,7 @@ import {
   MockLLMAdapter,
   createAgentLoop,
   createContextBuilder,
+  createMemoryStore,
   createFailureClassifier,
   createFeedbackLoop,
   createFixSuggestionBuilder,
@@ -12,7 +13,9 @@ import {
   createTestRunner,
   type AgentLoop,
   type LLMAdapter,
+  type MemoryStore,
 } from '@harness/core';
+import { join } from 'node:path';
 import type {
   AgentRun,
   AgentRunOutput,
@@ -49,6 +52,17 @@ class LLMProviderError extends Error {
     this.name = 'LLMProviderError';
   }
 }
+
+const createProjectMemoryStore = (workspace: string): MemoryStore => {
+  const store = createMemoryStore(join(workspace, '.harness-memories.db'));
+  return {
+    add: async (entry) => (await store).add(entry),
+    search: async (projectPath, query, options) => (await store).search(projectPath, query, options),
+    list: async (projectPath) => (await store).list(projectPath),
+    delete: async (id) => (await store).delete(id),
+    getByType: async (projectPath, type) => (await store).getByType(projectPath, type),
+  };
+};
 
 const createTransientDeepSeekResource: ByokAdapterFactory = (apiKey) => {
   let adapter: DeepSeekAdapter | undefined = new DeepSeekAdapter({
@@ -119,6 +133,7 @@ export const createPrivilegedAgentRun = (
     feedback,
     contextBuilder: createContextBuilder(),
     stopCondition: createStopCondition(),
+    memoryStore: createProjectMemoryStore(session.workspace),
     config: { maxIterations: 10 },
     onEvent: (type, data) => emit(type as SSEEvent['type'], data),
   });

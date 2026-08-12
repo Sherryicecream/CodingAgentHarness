@@ -14,6 +14,7 @@ import type { GovernanceService } from '../guardrail/index.js';
 import type { FeedbackLoop } from '../feedback/feedback-loop.js';
 import type { ContextBuilder } from './context-builder.js';
 import type { StopCondition } from './stop-condition.js';
+import type { MemoryStore } from '../memory/memory-store.js';
 import { parseResponse } from '../llm/response-parser.js';
 
 export interface AgentLoopDependencies {
@@ -23,6 +24,7 @@ export interface AgentLoopDependencies {
   feedback: FeedbackLoop;
   contextBuilder: ContextBuilder;
   stopCondition: StopCondition;
+  memoryStore: MemoryStore;
   config: { maxIterations: number };
   onEvent?: (type: string, data: any) => void;
 }
@@ -59,6 +61,8 @@ const isTestCommand = (command: string): boolean => {
     || /node\s+.*\.spec\.(js|ts|mjs)/.test(lower)
     || /^(npx|npm)\s+(test|vitest|jest|run test)/.test(lower);
 };
+
+const MAX_CONTEXT_MEMORIES = 10;
 
 export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
   deps.tools.setGovernance(deps.governance);
@@ -190,11 +194,16 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
         ({ response, parsed, toolIndex: firstToolIndex } = state.pending);
         state.pending = null;
       } else {
+        const memories = await deps.memoryStore.search(
+          state.workingDir,
+          state.task,
+          { limit: MAX_CONTEXT_MEMORIES },
+        );
         const context = deps.contextBuilder.build({
           task: state.task,
           messages: state.messages,
           tools: deps.tools.list(),
-          memories: [],
+          memories,
           config: deps.config as any,
           feedbackState: state.feedbackState,
         });

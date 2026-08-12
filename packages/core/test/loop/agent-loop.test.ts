@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createAgentLoop, AgentLoop, AgentLoopDependencies } from '../../src/loop/agent-loop.js';
 import { MockLLMAdapter } from '../../src/llm/mock.js';
 import { createToolRegistry, ToolApprovalRequiredError, ToolRegistry } from '../../src/tools/tool.js';
@@ -6,7 +6,8 @@ import { createGovernanceService, GovernanceService } from '../../src/guardrail/
 import { createContextBuilder, ContextBuilder } from '../../src/loop/context-builder.js';
 import { createStopCondition, StopCondition } from '../../src/loop/stop-condition.js';
 import { FeedbackLoop } from '../../src/feedback/feedback-loop.js';
-import { AgentResponse, Tool, ToolResult, FeedbackResult, FeedbackState } from '../../src/types.js';
+import { MemoryStore } from '../../src/memory/memory-store.js';
+import { AgentContext, AgentResponse, MemoryEntry, Tool, ToolResult, FeedbackResult, FeedbackState } from '../../src/types.js';
 
 function makeResponse(content: string, toolCalls: any[] = []): AgentResponse {
   return { content, toolCalls };
@@ -104,11 +105,78 @@ function buildDeps(overrides: Partial<AgentLoopDependencies> & {
 }): AgentLoopDependencies {
   return {
     config: { maxIterations: 20 },
+    memoryStore: createEmptyMemoryStore(),
     ...overrides,
   };
 }
 
+function createEmptyMemoryStore(): MemoryStore {
+  return {
+    add: async () => { throw new Error('not used in AgentLoop tests'); },
+    search: async () => [],
+    list: async () => [],
+    delete: async () => {},
+    getByType: async () => [],
+  };
+}
+
 describe('AgentLoop', () => {
+  describe('memory context', () => {
+    it('injects only the current project memories into the LLM request', async () => {
+      const matchingMemory: MemoryEntry = {
+        id: 'project-a-memory',
+        type: 'convention',
+        content: 'Use project memory for releases',
+        source: 'project-a',
+        projectPath: '/project/a',
+        createdAt: new Date(),
+        lastAccessedAt: new Date(),
+      };
+      const otherProjectMemory: MemoryEntry = {
+        ...matchingMemory,
+        id: 'project-b-memory',
+        content: 'Do not expose project B deployment details',
+        source: 'project-b',
+        projectPath: '/project/b',
+      };
+      const search = vi.fn(async (projectPath: string, query: string) => {
+        if (projectPath === '/project/a' && query === 'Use project memory') {
+          return [matchingMemory];
+        }
+        return [otherProjectMemory];
+      });
+      const memoryStore = {
+        ...createEmptyMemoryStore(),
+        search,
+      } as unknown as MemoryStore;
+      const contexts: AgentContext[] = [];
+      const llm = {
+        async sendMessage(context: AgentContext): Promise<AgentResponse> {
+          contexts.push(context);
+          return makeResponse('TASK_COMPLETE');
+        },
+      };
+
+      const loop = createAgentLoop(buildDeps({
+        llm,
+        tools: createToolRegistry(),
+        governance: createGovernanceService(),
+        feedback: makeMockFeedbackLoop(),
+        contextBuilder: createContextBuilder(),
+        stopCondition: createStopCondition(),
+        memoryStore,
+      }));
+
+      await loop.run('Use project memory', '/project/a');
+
+      expect(search).toHaveBeenCalledWith('/project/a', 'Use project memory', { limit: 10 });
+      expect(contexts[0]!.messages.map((message) => message.content).join('\n'))
+        .toContain('Use project memory for releases');
+      expect(contexts[0]!.messages.map((message) => message.content).join('\n'))
+        .not.toContain('project B deployment details');
+    });
+  });
+
   // ── Test 1: Simple task — LLM responds with TASK_COMPLETE, loop ends with "completed" ──
   describe('simple task completion', () => {
     it('should complete when LLM responds with TASK_COMPLETE', async () => {
