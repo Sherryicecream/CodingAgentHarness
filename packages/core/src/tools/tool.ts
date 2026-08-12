@@ -1,4 +1,5 @@
 import { Tool, ToolDefinition, ToolResult, RiskLevel } from '../types.js';
+import type { GovernanceService } from '../guardrail/index.js';
 
 export class ToolNotFoundError extends Error {
   constructor(name: string) {
@@ -7,11 +8,23 @@ export class ToolNotFoundError extends Error {
   }
 }
 
+export class ToolApprovalRequiredError extends Error {
+  constructor(name: string) {
+    super(`Tool approval required: ${name}`);
+    this.name = 'ToolApprovalRequiredError';
+  }
+}
+
+export interface ToolExecutionContext {
+  governance: GovernanceService;
+  toolCallId: string;
+}
+
 export interface ToolRegistry {
   register(tool: Tool): void;
   get(name: string): Tool | undefined;
   list(): ToolDefinition[];
-  execute(name: string, params: Record<string, unknown>): Promise<ToolResult>;
+  execute(name: string, params: Record<string, unknown>, context?: ToolExecutionContext): Promise<ToolResult>;
   getByRiskLevel(level: RiskLevel): Tool[];
 }
 
@@ -31,10 +44,17 @@ export function createToolRegistry(): ToolRegistry {
       return Array.from(tools.values()).map(t => t.definition);
     },
 
-    async execute(name: string, params: Record<string, unknown>): Promise<ToolResult> {
+    async execute(name: string, params: Record<string, unknown>, context?: ToolExecutionContext): Promise<ToolResult> {
       const tool = tools.get(name);
       if (!tool) {
         throw new ToolNotFoundError(name);
+      }
+      if (context && !context.governance.preCheck({
+        id: context.toolCallId,
+        name,
+        arguments: params,
+      }, tool.riskLevel)) {
+        throw new ToolApprovalRequiredError(name);
       }
       return tool.execute(params);
     },

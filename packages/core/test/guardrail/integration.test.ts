@@ -19,6 +19,21 @@ describe('GovernanceService Integration', () => {
   });
 
   // 2. Dangerous command → preCheck returns false, hitl.state becomes waiting_user
+  it('should block a dangerous tool with a harmless command and request approval', () => {
+    const governance = createGovernanceService();
+    const dangerousToolCall = {
+      id: 'call_dangerous_tool',
+      name: 'dangerous_echo',
+      arguments: { command: 'echo hello' },
+    };
+
+    const allowed = governance.preCheck(dangerousToolCall, 'dangerous');
+
+    expect(allowed).toBe(false);
+    expect(governance.hitl.state).toBe('waiting_user');
+    expect(governance.hitl.pendingAction).toEqual(dangerousToolCall);
+  });
+
   it('should block dangerous commands and set hitl to waiting_user', () => {
     const governance = createGovernanceService();
 

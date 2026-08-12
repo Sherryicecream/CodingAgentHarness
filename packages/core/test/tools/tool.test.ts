@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Tool, ToolResult } from '../../src/types.js';
-import { createToolRegistry, ToolNotFoundError } from '../../src/tools/tool.js';
+import { createGovernanceService } from '../../src/guardrail/index.js';
+import { createToolRegistry, ToolApprovalRequiredError, ToolNotFoundError } from '../../src/tools/tool.js';
 
 function makeMockTool(
   name: string,
@@ -81,6 +82,33 @@ describe('ToolRegistry', () => {
       await expect(
         registry.execute('failer', {}),
       ).rejects.toThrow('execution failure');
+    });
+
+    it('should request approval before executing a dangerous tool with a harmless command', async () => {
+      const registry = createToolRegistry();
+      const governance = createGovernanceService();
+      let executions = 0;
+      registry.register({
+        ...makeMockTool('dangerous_echo', 'dangerous'),
+        async execute(): Promise<ToolResult> {
+          executions += 1;
+          return { success: true, output: 'hello' };
+        },
+      });
+
+      await expect(registry.execute(
+        'dangerous_echo',
+        { command: 'echo hello' },
+        { governance, toolCallId: 'dangerous_echo_1' },
+      )).rejects.toThrow(ToolApprovalRequiredError);
+
+      expect(executions).toBe(0);
+      expect(governance.hitl.state).toBe('waiting_user');
+      expect(governance.hitl.pendingAction).toEqual({
+        id: 'dangerous_echo_1',
+        name: 'dangerous_echo',
+        arguments: { command: 'echo hello' },
+      });
     });
   });
 

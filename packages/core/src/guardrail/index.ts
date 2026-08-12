@@ -1,9 +1,9 @@
 import { Guardrail, createGuardrail } from './guardrail.js';
 import { HITLManager, createHITLManager } from './hitl.js';
-import { ToolCallRequest } from '../types.js';
+import { RiskLevel, ToolCallRequest } from '../types.js';
 
 export interface GovernanceService {
-  preCheck(toolCall: ToolCallRequest): boolean;
+  preCheck(toolCall: ToolCallRequest, riskLevel?: RiskLevel): boolean;
   postCheck(toolCall: ToolCallRequest): boolean;
   hitl: HITLManager;
 }
@@ -13,8 +13,8 @@ export function createGovernanceService(config?: { blockedCommands?: string[] })
   const hitl = createHITLManager();
 
   return {
-    preCheck(toolCall: ToolCallRequest): boolean {
-      const decision = guardrail.check(toolCall);
+    preCheck(toolCall: ToolCallRequest, riskLevel?: RiskLevel): boolean {
+      const decision = guardrail.check(toolCall, riskLevel);
       if (decision === 'blocked') {
         hitl.requestApproval(toolCall);
         return false;

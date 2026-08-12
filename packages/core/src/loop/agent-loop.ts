@@ -216,7 +216,10 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
         }
         const toolCall = response.toolCalls[index]!;
         const approvedByUser = bypassGuardrail && index === firstToolIndex;
-        if (!approvedByUser && !deps.governance.preCheck(toolCall)) {
+        if (!approvedByUser && !deps.governance.preCheck(
+          toolCall,
+          deps.tools.get(toolCall.name)?.riskLevel,
+        )) {
           state.pending = { response, parsed, toolIndex: index };
           deps.onEvent?.('guardrail', { toolCall, decision: 'blocked' });
           return finish(state, 'blocked');

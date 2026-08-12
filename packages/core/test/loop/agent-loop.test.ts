@@ -304,7 +304,7 @@ describe('AgentLoop', () => {
       expect(result.session.toolCalls).toHaveLength(0);
     });
 
-    it('should allow safe commands through guardrail', async () => {
+    it('should require approval for a harmless command from a dangerous tool', async () => {
       const llm = new MockLLMAdapter([
         makeResponse('I will list files. TASK_COMPLETE', [
           makeToolCall('call_1', 'execute_shell', { command: 'ls -la' }),
@@ -321,8 +321,9 @@ describe('AgentLoop', () => {
 
       const result = await loop.run('List files', '/tmp/test');
 
-      expect(result.status).toBe('completed');
-      expect(result.session.toolCalls).toHaveLength(1);
+      expect(result.status).toBe('blocked');
+      expect(result.session.toolCalls).toHaveLength(0);
+      expect(governance.hitl.state).toBe('waiting_user');
     });
   });
 
