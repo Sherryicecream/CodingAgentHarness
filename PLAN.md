@@ -19,7 +19,9 @@
 | 3 | 证明反馈导致下一步 mock 行动改变 | `c48746d`, `750d787` | Core demo 6/6、Server demo 17/17、两个 build 通过 | 已闭合 |
 | 4 | 修复安装包 metadata、Server 入口和 CLI 解析 | `1666103` | Core 297、Server 184、包 build 与 stale-chunk 1/1；人工 clean-install 成功；自动 Windows 清理证据有间隙 | 部分闭合 |
 | 5 | 隔离本地凭据文件并验证完整生命周期 | `61bed5f` | focused lifecycle 1/1、Server 185/185、Server build 通过 | 已闭合 |
-| 6 | 对齐五份交付文档并增加一致性扫描 | 本轮原子提交 | controlled fixture RED/GREEN、旧文档 claim-level RED、修订后扫描与比例验证 | 本轮执行 |
+| 6 | 对齐五份交付文档并增加一致性扫描 | `874f29f` | scanner 10/10、五份文档扫描通过 | 已闭合 |
+| 7 | CI 构建与 package entry 可复现验证 | `714b078` | CI contract 2/2、package verifier 3/3、build 通过；root test 超过 240 秒后终止 | 已闭合 |
+| 8 | 最终验证、学生反思清单与发布边界 | 本提交（验证基线 `714b078`） | Core 297、Server 185、build、demo/mechanism、凭据与 package 检查通过；CLI clean-install 自动证据仍超时 | 部分闭合 |
 
 ## Task 1：危险工具治理
 
@@ -113,6 +115,9 @@
 ## 明确保留的关注项
 
 - Task 4 的自动 Windows clean-install/cleanup 成功证据尚未闭合。
+- 2026-08-12 最终复验中，完整 CLI suite 在无输出状态下超过 240 秒并被终止；仅两个非安装 CLI 检查 2/2 通过，不能推出 clean-install/start/cleanup 自动验证成功。
 - Task 5 测试的端口预留竞态和路径空白直接覆盖可后续加强。
 - 任务报告记录的旧 Server 独立 `tsc --noEmit` 错误不属于本轮文档修改；不能宣称全仓类型检查通过。
+- `REFLECTION.md` 只读复核发现 2,696 个汉字，超过 2,500 上限，且含未核验部署/历史数字和文字问题；只有学生本人可按忽略目录中的 checklist 修改正文。
+- `submission.jsonc` 保持只读；其 `is_deployed: true` 和公网地址未在本轮访问或核验，也未改成 Release URL。
 - Release 附件的最终 URL、tag 和文件名只有实际发布后才能记录；本计划不执行发布、推送或外部操作。

@@ -64,6 +64,24 @@
 - **人工干预**：明确要求保留 Task 4 人工成功与自动化间隙的区别，不改 `REFLECTION.md`，不触碰共享 worktree 中既有 CLI test 修改和 artifacts。
 - **教训**：文档测试必须执行 scanner 并断言行为，不能只 grep scanner 源码；PowerShell 默认解码造成的显示乱码应与实际 UTF-8 字节损坏区分。
 
+## 2026-08-12 — Task 7：CI 与 package entry 验证
+
+- **任务**：让 GitHub/GitLab CI 保留 `unit-test`，并按顺序执行 install、test、build 和 dry-run package entry 验证。
+- **过程技能/上下文**：配置 contract test 先对缺失命令取得 RED，再以最小 CI/script 修改取得 GREEN；package verifier 只使用临时 npm cache 和 `npm pack --dry-run`。
+- **提交**：`714b078`。
+- **结果**：CI contract 2/2、package verifier 三个 workspace 全部通过、production build 和文档检查通过。完整 root test 超过 240 秒后终止，未宣称通过。
+- **教训**：CI 文本契约和 dry-run manifest 能证明命令与入口存在，但不能替代安装后启动/停止的生命周期证据。
+
+## 2026-08-12 — Task 8：最终交付验证
+
+- **任务**：在 `codex/final-delivery` 的 `714b078` 基线上独立复验 tests/build/package、安全机制、凭据生命周期、文档与只读提交材料，并停止在任何外部发布动作之前。
+- **过程技能/上下文**：executing-plans、verification-before-completion、code-review-and-quality 与 Git hygiene；没有产品代码改动，因此没有制造 RED→GREEN。
+- **结果**：Core 31 files/297 tests、Server 20 files/185 tests、Core demo 6/6、Server demo 17/17、HITL/feedback/memory focused 62/62、credential focused 3/3、三个 production builds、package verifier 和文档 scanner 均退出 0。实际临时 tarball 为 Core 3、Server 9、CLI 2 个条目，required entries 全在且敏感/仓库条目扫描为 0。
+- **证据间隙**：完整 CLI suite 无输出运行超过 240 秒后被终止；两个非安装 CLI 检查 2/2 通过但带现有 `DEP0190` warning。Task 4 用户提供的一次人工 clean-install 成功仍只算人工证据，自动 Windows install/start/cleanup 未闭合。
+- **安全审查**：HEAD 历史 126 个 commits 的高置信秘密模式命中只位于五个测试路径；当前生产代码/受控交付文档未发现真实秘密。`git diff --check 0fb39b8..714b078` 仅报告已提交 Task 7 SDD report 的 EOF 空行，属于非阻断文档 nit。
+- **学生材料**：`REFLECTION.md` 只读计数为 2,696 个汉字（上限 2,500），无 Markdown headings，并含未核验部署/历史数字与若干文字问题；只更新 ignored checklist，不改正文。`submission.jsonc` 只读确认仍为 `is_deployed: true` 和现有公网地址，本轮未访问、验证或修改。
+- **外部边界**：没有 push、PR、npm publish、GitHub Release、submission URL 变更或真实凭据操作；任何 Release/提交修改仍需精确外部授权。
+
 ## 当前证据边界
 
 - 本日志不声明 npm 发布、release 上传、push、PR、外部部署或真实凭据操作。
