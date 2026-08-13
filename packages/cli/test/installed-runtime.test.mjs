@@ -83,6 +83,15 @@ const waitForExit = (child, timeoutMs) => new Promise((resolveExit, rejectExit) 
   });
 });
 
+const terminateFixtureProcess = (pid) => {
+  if (!pid) return;
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch (error) {
+    if (error?.code !== 'ESRCH') throw error;
+  }
+};
+
 const stopProcessTree = async (child, url, timeoutMs = 10_000) => {
   if (!child || child.exitCode !== null) {
     await waitForPortToClose(url, timeoutMs);
@@ -161,9 +170,7 @@ test('Windows cleanup reports a descendant server left listening after normal CL
     await assert.rejects(readFile(installDirectory), { code: 'ENOENT' });
   } finally {
     wrapper.kill();
-    if (serverPid) {
-      spawnSync('taskkill', ['/pid', String(serverPid), '/t', '/f'], { stdio: 'ignore' });
-    }
+    terminateFixtureProcess(serverPid);
     await waitForPortToClose(url);
   }
 });
