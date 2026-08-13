@@ -1,116 +1,190 @@
-# Agent 日志
+# AGENT_LOG：AI 协作开发时间线
 
-## 2026-08-13 — 本地预览反馈与最终交付复核
+## 记录规则
 
-- **问题与修复**：推荐演示写文件未进入 ArtifactTracker（`badd838`）；npm workspace 启动导致项目根误判（`343fe78`, `bf4693e`）；完成会话被 sweep 立即回收导致导出失败（`dc7d52e`）。
-- **凭据诊断**：连接测试改为 DeepSeek `/models` 认证请求，不生成对话；稳定区分 Key 无效、计费、限流、服务故障与本机网络错误。真实 Key 不进入日志或响应。
-- **验证**：Server 23 files/197 tests、Core 31 files/297 tests、CLI lifecycle 4/4、全 workspace typecheck、build、package verifier、静态边界和生产依赖审计通过。
-- **人工干预**：用户在真实 WebUI 中复现“导出失败”和“测试连接失败”，促使从单元测试扩展到真实本地预览链路检查。
-- **教训**：构建成功不等于主页可访问；工具写成功不等于产物已登记；完成状态不应等于立即可回收；错误码必须能指导用户行动。
-- **分支完成**：`finishing-a-development-branch` 全量验证通过后，用户选择“本地合并到 master”；形成 merge commit `ebc225f`。本次收尾未创建 PR，是用户在技能菜单中的明确集成选择；该偏差记录于 `SPEC_PROCESS.md`。
+本日志覆盖 2026-07-25 至 2026-08-13 的关键实现节点，对应 AI4SE §4.9。早期阶段按功能归组，8 月 12–13 日保留更细任务记录。每项尽可能给出 task/阶段、技能或协作方式、context、commit、人工干预和教训。
 
-> 下文 2026-08-12 的数字与 Provider/加密文件描述是当时历史记录，已被以上当前实现取代，不应作为最终产品现状。
+证据标签：**Git** 表示可由提交确认；**历史日志**表示内容来自当时已提交日志但原始会话不在仓库；**当前复核**表示 8 月 12–13 日由 briefs/reports、测试或本地预览再次确认。测试数只代表对应日期的快照。
 
-## 2026-08-13 — 本地优先最终收尾
+## 2026-07-25 — 立项、SPEC 与 PLAN
 
-- **决策**：不部署服务器；线上交付为不接收 Key 的静态机制演示，完整功能通过 loopback CLI/WebUI 运行。
-- **实现**：移除主密码、加密文件与通用 Provider 配置；持久凭据进入 OS 凭据库，不可用时保留“仅本次使用”。会话产物按大小与 SHA-256 验证，整组导出至 `.harness/outputs/<session-id>/manifest.json`。
-- **边界**：未使用真实 Key，未部署或推送，未修改学生 `REFLECTION.md`。
-- **继续收尾**：新增导出变更预览、摘要绑定且单次消费的批准、项目应用操作；GitHub Pages 仅发布静态演示，并依赖完整 CI 成功。
+- **Tasks**：问题定义、架构选型、62-task 实现计划。
+- **Skills/context**：历史日志记录使用 brainstorming、writing-plans；目标是自建 Harness 内核、Mock LLM 测试和 WebUI。
+- **关键输出（Git）**：`bb4839d` 初始 SPEC；`70ffe41`、`87c091e` 两轮架构调整；`188482d` 完成 PLAN。
+- **人工决策**：TypeScript 严格模式、npm workspaces、Vitest；反馈闭环为主角机制；Express + React Web-first；CLI 为薄启动器。
+- **方法偏差**：没有在实现前完成课程要求的陌生智能体冷启动。
+- **教训**：先写 SPEC/PLAN 能形成提交边界，但详细 task 不自动保证陌生执行者能理解依赖。
 
-## 2026-08-13 — 文件保留与 Provider 配置收尾
+## 2026-07-25 — Phase 1–2：Monorepo 与 LLM 抽象
 
-- **任务**：简化 Provider 配置体验，并为任务文件增加用户主动保存的长期保留路径。
-- **过程/技能**：先阅读现有 README、SPEC、PLAN 与实现；采用测试先行和安全边界审查，未修改 `REFLECTION.md`。
-- **实现**：Provider 高级字段默认折叠；workspace 增加 `temporary`/`preserve` 策略；新增 `POST /api/agent/sessions/:sessionId/save`，固定输出到 `.harness/outputs/`，拒绝路径穿越、绝对路径、符号链接和非普通文件；public 模式返回 `403 PERSISTENCE_DISABLED`。
-- **提交**：`1c06232`、`c1077a3`、`deec9b3`；Provider adapter 安全 seam 为 `9076606`。
-- **边界/人工干预**：未触碰真实凭据、未修改 master、未发布或推送 Release；`REFLECTION.md` 保持原样。adapter seam 尚未宣称已接入 run-route。
-- **教训**：临时工作区适合自动回收；长期文件必须由用户明确保存并落到项目输出目录，public demo 不应获得持久化能力。
+- **Tasks**：1–9。
+- **协作方式**：历史日志记录为 subagent-driven-development；仓库未保存 agent 名称和原始 prompt。
+- **输出（Git）**：`efded2f` 至 `b3e4aba`，建立 Core/Server/CLI、类型、CI、LLMAdapter、MockLLMAdapter、DeepSeekAdapter 和 ResponseParser。
+- **Context**：Mock 响应 FIFO 用于确定性测试；真实适配器与核心循环通过接口解耦。
+- **人工干预**：选择 OpenAI-compatible DeepSeek 接口，同时要求核心测试不调用真实 API。
+- **教训**：纯类型接口需要 `tsc` 验证，不能只依赖运行时测试；这一缺陷后来由冷启动发现。
 
-> 本日志保留 2026-08-12 final-delivery hardening 中可由 briefs、reports 和 Git commits 核验的记录。没有原始证据的 prompt 原文、外部操作或角色名称不作补写。
+## 2026-07-25 — Phase 3–4：工具与治理
 
-## 记录字段
+- **Tasks**：10–22。
+- **输出（Git）**：`8032083` 至 `cf1f291`，实现 ToolRegistry、文件/Shell/测试/Git 工具、Guardrail、HITLManager 和 GovernanceService。
+- **Context**：工具携带风险等级，命令内容再接受护栏检查。
+- **人工决策**：危险操作必须进入 HITL；文件工具限制路径穿越和 `.git`。
+- **后续缺陷**：风险元数据最初未完全进入最终 dispatch，批准也可能过宽或复用，8 月 12 日集中修复。
+- **教训**：预检查安全不等于执行边界安全。
 
-每项包含：日期、任务、使用的过程技能/上下文、执行或审查角色证据、提交、人工干预和教训。这里的“独立审查”只表示任务报告明确记录的 reviewer 反馈；报告没有保存 subagent 名称时，不猜测名称。
+## 2026-07-25 — Phase 5：反馈闭环
 
-## 2026-08-12 — Task 1：危险工具风险治理
+- **Tasks**：23–32。
+- **输出（Git）**：`aee5335` 至 `dba0ce3`，实现 TestRunner、解析器、分类器、FixSuggestionBuilder、FeedbackLoop 和 demo。
+- **Context**：Harness 只提供结构化失败上下文，LLM 生成修复动作；支持 Jest/Vitest parser。
+- **人工决策**：拒绝让 Harness 自身生成补丁，以保持机制确定性和可测试性。
+- **教训**：预排两条 mock 响应只能证明顺序，不能证明反馈导致第二动作改变；8 月 12 日补了因果测试。
 
-- **任务**：让 registered tool 的 `riskLevel: dangerous` 在最终执行边界触发 Governance/HITL，即使命令文本无害。
-- **过程技能/上下文**：task brief 要求严格 TDD、focused Core tests、full Core suite 和 risk-aware dispatch；reports 保存了 RED/GREEN 与四轮 review fix。
-- **执行/审查角色证据**：实现代理完成初始测试与代码；独立 reviewer 连续指出 Registry 可绕过、批准布尔值过宽、批准可复用和 callback abort 竞态。报告没有保存代理名称或原始完整 prompt。
-- **提交**：`8a5662c`, `4fbf033`, `5398188`, `bb426ea`, `6d33edf`。
-- **人工干预**：协调要求每轮审查问题继续修复，并保留 scope；Windows PowerShell 的 `npm.ps1` 被策略阻止后，命令改用 `npm.cmd`。
-- **结果**：Core 292/292 和 build 通过；审查清洁。深层/数组/键序 mutation 与直接 authorize spy 被记录为可选增强。
-- **教训**：危险元数据只有到达最终 dispatch 才有安全意义；批准必须精确绑定动作、一次性消费，并在 abort 时清除。
+## 2026-07-25 — Phase 6–7：记忆、配置与 AgentLoop
 
-## 2026-08-12 — Task 2：项目记忆隔离
+- **Tasks**：33–43。
+- **输出（Git）**：`073c905`、`d9790e8`，实现 `sql.js` MemoryStore、ContextBuilder、ConfigLoader、StopCondition、AgentLoop 和 SessionStore。
+- **Context**：选择 WASM SQLite 避免 Windows 原生编译；AgentLoop 保持薄编排，能力经接口注入。
+- **人工决策**：记忆按 `project_path` 组织，配置采用默认值与用户覆盖。
+- **后续缺陷**：项目字段存在不代表搜索/删除/生产注入都隔离；8 月 12 日补齐全链路项目身份。
+- **教训**：数据隔离是调用链属性，不只是 schema 属性。
 
-- **任务**：MemoryStore 的 search/write/delete 使用显式 project identity，AgentLoop 只获取当前项目的 bounded memories，Server 注入生产 store。
-- **过程技能/上下文**：task brief 指定同关键词跨项目 RED、AgentLoop/context RED、SQL 过滤、依赖注入、focused/full tests。
-- **执行/审查角色证据**：实现代理完成初始隔离；独立 reviewer 发现 Server production caller 缺少 MemoryStore，并要求删除路径也按项目隔离。未保存 subagent 名称。
-- **提交**：`7873131`, `2469f5b`, `a62658b`。
-- **人工干预**：审查发现超出原始文件清单但属于真实 production seam 的 Server caller，协调接受该最小扩展；独立 Server typecheck 的旧错误被明确记录而未顺手修改。
-- **结果**：Core 295/295、memory 9/9、Server focused integration 和 Server build 通过。
-- **教训**：项目隔离必须贯穿数据库查询、删除、循环上下文和生产 composition root；只在 schema 中保存 project path 不够。
+## 2026-07-25 — Phase 8–9：Server、React WebUI、CLI 与文档
 
-## 2026-08-12 — Task 3：反馈驱动行动修正
+- **Tasks**：44–62。
+- **输出（Git）**：`d05e21f`、`5844d59`、`ddacaa6`，实现 Express API、SSE、React 组件、CLI、README、首版 SPEC_PROCESS/AGENT_LOG。
+- **Context**：SSE 推送执行事件，REST 发送控制请求；不引入 React Router。
+- **人工决策**：WebUI 用于时间线和 HITL 可视化，CLI 只负责启动本地服务并打开浏览器。
+- **方法偏差**：这些阶段直接在 `master` 线性开发，没有逐功能 worktree/PR。
+- **教训**：真实分发不能依赖 monorepo 相对路径；后来必须用 packed CLI 验证。
 
-- **任务**：证明结构化测试反馈实际改变下一次 MockLLMAdapter 行动，不接受无条件 FIFO 排队作为因果证据。
-- **过程技能/上下文**：brief 要求 real AgentLoop、known failing test、actionable fix、selector 和 public demo allowlist 保持不变。
-- **执行/审查角色证据**：实现代理增加 request-recording selector 与反馈消息；独立 reviewer 要求 selector 必须观察发送给 LLM 的 message，而不能依赖私有 feedback state 或预置顺序。角色名称未记录。
-- **提交**：`c48746d`, `750d787`。
-- **人工干预**：审查后增加“反馈消息缺失就不能给出修正响应”的回归测试，没有扩展 public demo 输入面。
-- **结果**：Core demos 6/6、Server demos 17/17，Core/Server builds 通过。
-- **教训**：顺序相关不等于反馈因果；测试要让第二行动对可观察反馈条件敏感。
+## 2026-08-03 — 冷启动补做、UI 与凭据/分发收尾
 
-## 2026-08-12 — Task 4：安装包与 CLI runtime
+- **Tasks**：陌生 agent 尝试 Tasks 6–7；Open Design UI；凭据和 Docker 分发。
+- **Skills/context**：冷启动使用不同 agent 的全新上下文，只提供当时 SPEC/PLAN；但发生在主体实现之后。
+- **输出（Git）**：`3ae72d3` UI design；`be10126` 修复冷启动发现；`47edb81` 记录结果；`c4c36ec` 凭据/容器/文档；`1be4bab` 中文 UI。
+- **Agent 暂停/输出摘要（历史日志）**：发现脚手架假设、LLMAdapter 双权威位置、Vitest 无法验证纯类型、Mock error/数组所有权不明、依赖过晚和部署描述冲突。
+- **人工干预**：修订 SPEC/PLAN；将早期凭据改为 AES-256-GCM 加密文件；增加 ConfigPage；部署叙述从托管平台转向国内云主机容器方案（两者均为历史设计）。
+- **偏差**：冷启动补做有价值，但不满足“实现前验证”；历史日志中的外部部署结果当前未重新核验。
+- **教训**：让陌生 agent 真正实现，比仅让它评论文档更容易发现规约缺陷。
 
-- **任务**：为 Server/CLI 包建立稳定安装入口，去除 monorepo 相对解析，并避免 stale server chunk 进入 tarball。
-- **过程技能/上下文**：brief 原本要求 pack、fresh install、运行 `harness`、health/WebUI 和 cleanup 的自动端到端验证；任务执行遵循先 manifest regression RED 再产品修复。
-- **执行/审查角色证据**：实现代理完成 package metadata、CLI resolution 和 clean build。报告没有记录独立 reviewer 的名称。
-- **提交**：`1666103`。
-- **人工干预**：自动完整安装运行在 package-install 阶段超时后，协调禁止继续网络安装；后来用户提供一次人工 clean-install 证据：新增 90 个包，CLI/Server/Client 入口存在，health 200/local，首页 200，停止后无监听。
-- **结果**：stale-chunk manifest 1/1、Core 297、Server 184 和三个 package build 通过。人工安装成功与自动 Windows cleanup 未核验被分别记录。
-- **教训**：package manifest 通过不能自动推出安装后 lifecycle 通过；人工验证不能改写成自动化证据。
+## 2026-08-07 — 反思、审查与回溯 PR
 
-## 2026-08-12 — Task 5：隔离凭据生命周期
+- **Tasks**：反思报告、严重/重要问题审查、Git 流程补救。
+- **输出（Git）**：`1162ace` Reflection；`20817a5`、`4ab2b9d` 修复审查问题；`c301890` 记录回溯 PR。
+- **人工干预**：修复 AgentLoop 状态、Docker healthcheck、Guardrail 正则和类型逃逸；为 Phase 1–9 从历史提交创建回溯分支/PR。
+- **方法偏差**：回溯 cherry-pick 改变 commit 身份，只能用于展示分阶段差异，不能证明原开发使用了 worktree/PR。
+- **教训**：Git 工作流证据必须在开发当时形成，无法在收尾阶段完整追建。
 
-- **任务**：增加 `HARNESS_CREDENTIALS_FILE` 本地测试 seam，并通过真实 loopback HTTP 验证 fake credential 的 initialize/update/lock/unlock/clear。
-- **过程技能/上下文**：协调将原 tarball verifier 范围收窄为本地 Server credential lifecycle，要求默认路径不变、所有可写位置沙箱化、响应/加密文件无明文、进程可靠停止。
-- **执行/审查角色证据**：实现代理先遇到 Windows `os.userInfo()`/launcher 环境错误；该错误未被冒充为产品 RED。修正 test harness 后得到 seam-specific RED。reviewer 要求提供最小 production change 之后、launcher refactor 之前的独立 GREEN。
-- **提交**：`61bed5f`（其前置安装解析提交为 `1666103`）。
-- **人工干预**：协调明确不能读取真实 `~/.harness/credentials.enc`，也不能再做完整 tarball 网络安装；review fix 只根据原始命令结果补齐 report，没有制造新 code diff。
-- **结果**：focused lifecycle 1/1、Server 185/185、Server build 通过；真实用户凭据路径未读取或修改。
-- **教训**：环境启动失败不是目标行为 RED；安全测试先证明 sandbox home，再 import Server。测试 seam 应显式覆盖而保持生产默认不变。
+## 2026-08-08 — 凭据泄漏修复与公开 API 安全
 
-## 2026-08-12 — Task 6：文档一致性
+- **Tasks**：credential leak remediation；public API security Tasks 1–8。
+- **Skills/context**：brainstorming、writing-plans、worktree、TDD、subagent-driven-development、requesting-code-review、verification-before-completion；分支 `codex/public-api-security`。
+- **输出（Git）**：`0fb8d37`/`89bb33f` 设计计划；`b019157`/`d2e09f6` public security 设计计划；`c35d31c` 至 `87ec31a` 实现 app factory、RuntimePolicy、Server-owned workspace/session、瞬时 BYOK、deterministic demo 和 UI。
+- **Review 修复**：`91799d7` 至 `bbd4078` 处理 cleanup、session race、BYOK 生命周期；`aef4b95` 至 `2a924cd` 处理 demo capability/write race。
+- **人工决策**：public 不注册 Shell/Git/进程工具，不保存 Key；local 保留完整能力；服务端 capability 而非 UI 隐藏决定权限。
+- **教训**：安全关键异步流程需要所有权、generation/abort 和终态串行化，单一 mounted flag 不够。
 
-- **任务**：对齐 README、SPEC、PLAN、SPEC_PROCESS、AGENT_LOG，并加入只扫描这五份文件的 Node consistency checker。
-- **过程技能/上下文**：严格 TDD、Git workflow、verification-before-completion；先读取 branch 与 `origin/master` 实际文件。两者在五份文档上无差异。
-- **执行/审查角色证据**：当前实现代理先写 controlled-fixture test；scanner 不存在时测试 RED。实现 scanner 后的早期 checkpoint 为 fixtures 2/2 GREEN，未改文档的真实扫描产生 38 项 claim-level RED；随后审查推动独立 `PUBLIC_FULL_PRODUCT` 与逐类 fixtures，当前 suite 为 10/10。最终提交在 Git 写入后记录，不预先编造。
-- **人工干预**：明确要求保留 Task 4 人工成功与自动化间隙的区别，不改 `REFLECTION.md`，不触碰共享 worktree 中既有 CLI test 修改和 artifacts。
-- **教训**：文档测试必须执行 scanner 并断言行为，不能只 grep scanner 源码；PowerShell 默认解码造成的显示乱码应与实际 UTF-8 字节损坏区分。
+## 2026-08-09 — 公开/本地体验边界与主密码方案
 
-## 2026-08-12 — Task 7：CI 与 package entry 验证
+- **Tasks**：本地/公网体验设计；master-password credential lifecycle。
+- **输出（Git）**：`a6225d0`、`c6f2b36` 体验设计/计划；`d677125` 至 `f36b50a` 实现；`d101353`、`21ccdb9` 主密码设计/计划；`912c422` 至 `5858f19` 凭据生命周期。
+- **Context**：公网展示 demo，真实 API 只在本地；主密码方案使用 scrypt + AES-256-GCM 文件并显式 lock/unlock。
+- **人工干预**：HTTP BYOK 只在明确配置/loopback 边界内允许；公开历史在浏览器本地保留而服务端不持久化。
+- **后续修正**：用户认为主密码和 Provider 配置冗余、逻辑不清，8 月 13 日最终改为 OS keyring。
+- **教训**：密码学上成立的方案仍可能在产品生命周期和可解释性上失败。
 
-- **任务**：让 GitHub/GitLab CI 保留 `unit-test`，并按顺序执行 install、test、build 和 dry-run package entry 验证。
-- **过程技能/上下文**：配置 contract test 先对缺失命令取得 RED，再以最小 CI/script 修改取得 GREEN；package verifier 只使用临时 npm cache 和 `npm pack --dry-run`。
-- **提交**：`714b078`。
-- **结果**：CI contract 2/2、package verifier 三个 workspace 全部通过、production build 和文档检查通过。完整 root test 超过 240 秒后终止，未宣称通过。
-- **教训**：CI 文本契约和 dry-run manifest 能证明命令与入口存在，但不能替代安装后启动/停止的生命周期证据。
+## 2026-08-12 — Final-delivery hardening：设计与执行
 
-## 2026-08-12 — Task 8：最终交付验证
+- **Worktree/branch**：`.worktrees/final-delivery`；`codex/final-delivery`；基线 `0fb39b8`。
+- **Skills/context**：brainstorming、writing-plans、using-git-worktrees、subagent-driven-development、TDD、两阶段 review、verification-before-completion。
+- **设计/计划（Git）**：`72993d7`、`153b8f7`。
 
-- **任务**：在 `codex/final-delivery` 的 `714b078` 基线上独立复验 tests/build/package、安全机制、凭据生命周期、文档与只读提交材料，并停止在任何外部发布动作之前。
-- **过程技能/上下文**：executing-plans、verification-before-completion、code-review-and-quality 与 Git hygiene；没有产品代码改动，因此没有制造 RED→GREEN。
-- **结果**：Core 31 files/297 tests、Server 20 files/185 tests、Core demo 6/6、Server demo 17/17、HITL/feedback/memory focused 62/62、credential focused 3/3、三个 production builds、package verifier 和文档 scanner 均退出 0。实际临时 tarball 为 Core 3、Server 9、CLI 2 个条目，required entries 全在且敏感/仓库条目扫描为 0。
-- **证据间隙**：完整 CLI suite 无输出运行超过 240 秒后被终止；两个非安装 CLI 检查 2/2 通过但带现有 `DEP0190` warning。Task 4 用户提供的一次人工 clean-install 成功仍只算人工证据，自动 Windows install/start/cleanup 未闭合。
-- **安全审查**：verification baseline `714b078` history: 126 commits；高置信秘密模式命中只位于五个测试路径，当前生产代码/受控交付文档未发现真实秘密。`git diff --check 0fb39b8..714b078` 仅报告已提交 Task 7 SDD report 的 EOF 空行，属于非阻断文档 nit。
-- **学生材料**：`REFLECTION.md` 只读计数为 2,696 个汉字（上限 2,500），无 Markdown headings，并含未核验部署/历史数字与若干文字问题；只更新 ignored checklist，不改正文。`submission.jsonc` 只读确认仍为 `is_deployed: true` 和现有公网地址，本轮未访问、验证或修改。
-- **外部边界**：没有 push、PR、npm publish、GitHub Release、submission URL 变更或真实凭据操作；任何 Release/提交修改仍需精确外部授权。
+### Task 1：危险工具治理
 
-## 当前证据边界
+- **Commits**：`8a5662c`、`4fbf033`、`5398188`、`bb426ea`、`6d33edf`。
+- **Review**：四轮修复 Registry 绕过、批准匹配过宽、批准复用和 abort 竞态。
+- **人工干预**：要求继续修复 critical 问题并保持 scope；PowerShell 改用 `npm.cmd`。
+- **教训**：批准必须绑定不可变动作、一次消费并在 abort 时清除。
 
-- 本日志不声明 npm 发布、release 上传、push、PR、外部部署或真实凭据操作。
-- 每个测试计数绑定到对应任务报告，而不是当前全仓永久总数。
-- 早期项目阶段和所谓冷启动的详细叙述没有在本轮重新验证；请把它们视为历史材料，而非本加固周期的验收证据。
+### Task 2：项目记忆隔离
+
+- **Commits**：`7873131`、`2469f5b`、`a62658b`。
+- **Review**：补 Server production store 注入和项目隔离删除。
+- **教训**：搜索、写入、删除、retrieval 和 composition root 必须使用同一项目身份。
+
+### Task 3：反馈驱动修正
+
+- **Commits**：`c48746d`、`750d787`。
+- **Review**：selector 必须观察实际发给 LLM 的消息，缺少反馈时不能产生修正响应。
+- **教训**：先后顺序不等于因果。
+
+### Task 4：安装包与 CLI runtime
+
+- **Commit**：`1666103`。
+- **结果**：通过 package exports 解析 Server，并清理 stale chunks；早期完整安装测试曾超时，人工 clean install 与自动验收分开记录。
+- **教训**：manifest 正确不能推出安装后生命周期正确。
+
+### Task 5：隔离凭据测试
+
+- **Commit**：`61bed5f`。
+- **Context**：当时仍针对加密文件 seam；禁止读取真实用户凭据路径。
+- **后续状态**：该生产方案 8 月 13 日被 OS keyring 取代，测试改用 fake keyring/禁用 keyring。
+
+### Tasks 6–8：文档、CI/package 与验收
+
+- **Commits**：`874f29f`、`714b078`、`b0b29d7`、`5faeb2f`。
+- **输出**：文档 consistency scanner、CI contract、package verifier、全量验收报告。
+- **人工干预**：禁止把人工成功写成自动成功，不修改学生 Reflection。
+- **集成偏差**：finishing 技能后学生选择本地 merge，`ebc225f` 合入 `master`，本轮未建新 PR。
+- **教训**：所有完成声明必须绑定命令、日期和 commit。
+
+## 2026-08-13 — Windows CLI 生命周期与配置/文件保存
+
+- **Tasks**：packed CLI cleanup；Provider 配置；长期文件保存。
+- **输出（Git）**：`6c38022`、`93d3891`；`0fd978a` 至 `a435a4e`；`c1077a3`、`deec9b3`、`30bbd9b`。
+- **Context**：先后尝试 Provider/加密配置 UI，再根据用户反馈简化为 DeepSeek 线性配置；workspace 增加显式 preserve/save。
+- **人工干预**：用户指出主密码逻辑冗余、测试连接失败信息不清、生成文件不能长期保存。
+- **教训**：临时 workspace 适合隔离执行，长期文件必须由用户显式保存到项目输出目录；连接错误必须可行动。
+
+## 2026-08-13 — Local-first final delivery
+
+- **设计/计划（Git）**：`8e4cb9f`、`fdcc5c4`。
+- **用户决策**：不部署服务器；本地完整 WebUI，线上纯静态机制演示。
+- **实现（Git）**：`993ee8f` 恢复基线；`e6796a3` 完成本地优先交付；`921ba04` 安全应用导出；`192294e` 文档；`ebc225f` 合并。
+- **当前凭据边界**：OS keyring 持久化；临时 Key memory-only；无 keyring 时显式不可持久化。
+- **当前文件边界**：隔离 workspace 是临时区；保存/导出复制普通文件并验证 manifest/SHA-256 至项目 `.harness/outputs/<session-id>/`。
+- **教训**：公开可访问不等于公开完整能力；“不部署服务器”也能通过静态机制演示满足 WebUI 展示目标，但需与本地产品清晰区分。
+
+## 2026-08-13 — 本地预览反馈与缺陷修复
+
+- **问题**：产物未登记、项目根解析错误、完成会话过早清理、连接错误诊断不清。
+- **Commits**：`badd838`、`343fe78`、`bf4693e`、`dc7d52e`。
+- **人工干预**：用户在真实 WebUI 复现“产物导出失败”和“测试连接失败”，并提供隔离工作区路径。
+- **修正**：推荐演示文件进入 ArtifactTracker；导出相对调用项目根；completed/failed session 保留至 `expiresAt`；DeepSeek `/models` 测试区分认证、计费、限流、上游和网络错误。
+- **教训**：工具写文件不等于产物已登记；完成状态不等于立即可回收；本地预览是单元测试之外必要的入口验证。
+
+## 2026-08-13 — AI4SE 文档复核、干净 CI 与 Pages
+
+- **文档提交**：`8f0a4fa`，统一 README/SPEC/PLAN/过程文档并新增交付与 Reflection 指南。
+- **干净 CI 缺陷**：本地旧 `server/dist` 掩盖 CLI 类型依赖，GitHub runner 报找不到 `@harness/server`；`13236a3` 修复。
+- **Pages 分支条件缺陷**：workflow trigger 接受 `master`，deploy condition 只允许 `main`；`bf88990` 修正并加 contract test。
+- **验证边界**：公开 CI badge 为 passing；Pages URL 是否可访问仍取决于仓库 Pages 外部开关，不能由代码单独保证。
+- **教训**：本地构建缓存会制造假绿；CI 分支触发与 job 条件必须成对检查。
+
+## 全流程方法偏差汇总
+
+1. 冷启动在主体实现后补做，而非实现前。
+2. 7 月 25 日初期阶段未使用逐功能 worktree/PR；8 月 7 日回溯 PR不能替代真实过程。
+3. final-delivery worktree 最终按学生选择本地 merge，未创建对应 PR。
+4. 凭据与交付方案多次改变；旧日志中的机器派生加密、主密码文件和云主机运行方案均不是当前实现。
+5. 部分早期记录缺少原始 prompt、agent 身份和外部结果；本文只保留摘要并明确证据等级。
+
+## 当前权威状态
+
+- 完整 Harness 仅在 loopback 本地运行；线上构建为无秘密、无真实 LLM、无进程工具的静态演示。
+- 持久凭据使用 OS keyring；临时 Key 仅在内存。
+- 长期文件保存到项目 `.harness/outputs/`；`.harness-workspaces` 是隔离临时区。
+- 当前验证基线记录为 Core 31 files/297 tests、Server 23 files/197 tests、CLI lifecycle 4/4；这些数字必须与对应 commit/运行日期一起解释。
+- `REFLECTION.md` 属于学生本人材料，本轮没有代写或修改。

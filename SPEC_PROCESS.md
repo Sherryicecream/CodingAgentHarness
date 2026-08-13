@@ -1,101 +1,205 @@
-# SPEC_PROCESS：规约形成与偏差记录
+# SPEC_PROCESS：规约形成、验证与演进记录
 
-## 证据范围
+## 1. 文档目的与证据口径
 
-本文只叙述可从当前 Git 历史、`docs/superpowers/` 计划以及 `.superpowers/sdd/2026-08-12-final-delivery-hardening/` briefs/reports 交叉确认的过程。早期文档曾包含冷启动、外部发布、回溯分支和 PR 等详细故事，但当前仓库不足以独立核验其会话输入、耗时或外部结果；这些故事不作为本轮事实证据。
+本文覆盖项目从 2026-07-25 立项到 2026-08-13 最终交付加固的完整规约过程，对应 AI4SE 通用要求 §4.4 和 §4.5。它回答的是：需求如何通过 brainstorming 变成 `SPEC.md` 和 `PLAN.md`，智能体提出了哪些关键问题，学生如何取舍，陌生智能体试运行暴露了什么缺陷，以及后续实现为何迫使规约多次变化。
 
-## 从需求到加固规约
+证据分为三类：
 
-2026-08-12，先以 `72993d7` 写入最终本地交付设计，再以 `153b8f7` 写入实施计划。设计把交付契约收窄为：
+- **可交叉确认事实**：Git commit、当前或历史文件、`docs/superpowers/` 设计/计划、`.superpowers/sdd/` briefs/reports 可以互相印证。
+- **历史日志记录**：旧版 `SPEC_PROCESS.md`/`AGENT_LOG.md` 保存了当时的对话摘要，但原始会话已不在仓库；本文保留其决策内容，并明确不把它冒充重新运行的证据。
+- **不补写内容**：无法确认的 prompt 全文、agent 名称、精确耗时和外部服务结果不凭记忆补造。
 
-- 完整能力在 localhost 的 `local` 模式运行。
-- `public` 只做确定性安全演示，不接触凭据和进程工具。
-- 三个 workspace 包通过 release tarball 交付；没有发布就不写最终地址。
-- 五个实现加固任务先完成，最后统一修正文档。
+因此，“覆盖全程”不等于声称每个早期细节都能重新验证；它意味着不遗漏关键阶段，并清楚标出证据强弱与方法偏差。
 
-这次先写 design/plan、再执行 tasks 的顺序可由提交历史确认。它不证明更早的项目阶段也使用了同样流程。
+## 2. 2026-07-25：从模糊目标到初始 SPEC/PLAN
 
-## 实际执行方式
+Git 历史显示，项目先后形成初始 `SPEC.md`（`bb4839d`）、两次架构修订（`70ffe41`、`87c091e`）和 62-task `PLAN.md`（`188482d`），之后才开始代码提交（`efded2f`）。历史日志记录此阶段使用了 brainstorming、writing-plans 和 subagent-driven-development。
 
-### 工作区
+### 2.1 Brainstorming 关键节点
 
-本轮加固在 `D:\CodingAgentHarness\.worktrees\final-delivery`、分支 `codex/final-delivery` 上执行，基线为 `origin/master` 的 `0fb39b8`。这是当前可观察事实。旧日志关于早期阶段是否从一开始使用 worktree 的描述互相矛盾，因此本轮不复述或修补那段历史。
+#### 节点一：技术栈与可测试性
 
-### 任务切片
+- **初始问题**：使用哪种语言才能同时完成内核、WebUI 和确定性 mock 测试？
+- **AI 建议**：优先定义可注入接口，再选择能约束接口契约的技术栈。
+- **学生决策**：采用 TypeScript 严格模式、npm workspaces 和 Vitest；`LLMAdapter`、工具、治理与反馈模块均通过接口隔离。
+- **影响**：Core、Server、CLI 能在一个 monorepo 内独立构建，MockLLMAdapter 可替代真实 API。
 
-计划把风险拆成可独立验证的边界：
+#### 节点二：主角机制的选择
 
-1. dangerous risk 是否真正进入最终执行治理。
-2. memory 是否在 SQL、AgentLoop 和 Server 调用路径中保持项目隔离。
-3. feedback 是否实际改变下一次 mock LLM 行动。
-4. 打包后的 CLI 是否只依赖 package metadata，并清除 stale build chunk。
-5. 本地凭据是否能在隔离路径完成真实 HTTP 生命周期。
-6. 产品文档是否只保留当前证据支持的交付契约。
+- **初始设想**：Agent 主循环、工具、记忆、治理和反馈都做成同等深度。
+- **AI 追问（历史日志摘要）**：Harness 应自己生成修复，还是只把测试失败转成结构化上下文，让 LLM 决定修复？
+- **学生修正**：把反馈闭环作为主角机制；Harness 负责 TestRunner → ResultParser → FailureClassifier → FixSuggestionBuilder 的确定性工程，LLM 负责生成动作。
+- **影响**：避免把不可预测的代码生成混入反馈机制本身，也便于完全使用 mock/stub 测试。
 
-每个 brief 指定接口、目标文件、RED/GREEN 命令和原子提交；对应 report 保存实际输出、审查修复和未解决关注项。
+#### 节点三：工具安全边界
 
-### TDD 与审查
+- **初始设想**：工具只是按名称注册的函数，危险命令主要靠字符串护栏拦截。
+- **AI 追问（历史日志摘要）**：护栏如何知道一个看似无害参数的工具本身具有危险能力？
+- **学生修正**：工具增加 `safe`、`moderate`、`dangerous` 风险等级，Governance/HITL 与命令内容检查共同构成纵深防御。
+- **后续验证**：8 月 12 日的回归测试进一步证明风险元数据必须进入最终 dispatch，不能只停留在预检查。
 
-Tasks 1–5 都按 brief 先写行为测试并记录 RED，然后做最小实现、运行 GREEN，再接受独立审查。审查不是形式门槛：
+#### 节点四：记忆存储
 
-- Task 1 经四轮修复，从“能阻断危险工具”收紧到 Registry 不可绕过、批准匹配不可变、批准一次性消费和 abort 安全。
-- Task 2 经两轮修复，补上 Server 生产注入和删除的项目隔离。
-- Task 3 经一轮修复，排除了无条件 FIFO 伪装成反馈因果性的可能。
-- Task 5 审查要求恢复“最小实现后、refactor 前”的独立 GREEN 证据，报告据原始命令结果补齐，没有伪造新运行。
+- **初始设想**：使用 JSON 文件保存记忆。
+- **AI 追问（历史日志摘要）**：跨项目搜索和并发访问如何处理？
+- **学生决策**：采用 `sql.js`，以 SQLite 数据模型和 `project_path` 实现结构化查询，同时避免 Windows 原生 SQLite 编译依赖。
+- **后续修正**：8 月 12 日发现“表中有 project_path”并不足够，搜索、删除、AgentLoop retrieval 和 Server 注入必须全部携带项目身份。
 
-Task 6 也先增加可执行 scanner 测试：受控 stale 文档必须非零并输出七类诊断，受控 clean 文档必须为零。scanner 实现后，再对未修改的真实五份文档捕获 claim-level RED，最后才修正文档。
+### 2.2 三轮关键迭代节选与处理决策
 
-## 已确认的设计演进
+课程要求至少三轮关键迭代。仓库保存的是摘要而非逐字 transcript，以下按历史记录如实整理。
 
-### 工具治理
+| 轮次 | 初始方案 | AI 的关键问题 | 学生处理 | 结果 |
+| --- | --- | --- | --- | --- |
+| 1：工具系统 | 仅按名称注册工具 | 风险如何到达最终执行边界？ | 增加风险等级和 Governance/HITL；后续再把批准绑定到不可变 action | 形成工具级风险 + 内容护栏的纵深模型 |
+| 2：反馈闭环 | Harness 自动生成代码补丁 | 确定性工程和创造性生成的责任边界在哪里？ | Harness 只生成结构化失败上下文，修复动作由 LLM 给出 | 反馈机制可用 mock 确定性测试 |
+| 3：记忆 | JSON 文件 | 如何跨项目隔离与搜索？ | 改为 `sql.js`，按项目身份过滤 | 获得结构化、可测试的项目记忆 |
+| 4：界面与分发 | CLI 为主、简单页面 | HITL 和执行时间线怎样直观展示？ | 改为 Express + React Web-first，CLI 作为本地启动器 | SSE、审批弹窗和反馈时间线成为主要交互 |
 
-最初风险模型容易把安全性寄托在命令正则。Task 1 的回归测试表明，registered tool 的 `riskLevel` 本身必须进入最终 dispatch 决策。最终边界由 ToolRegistry 与 Governance 共同执行，AgentLoop 不能用松散布尔值跳过授权。
+### 2.3 初始方案中的采纳与推翻
 
-### 项目记忆
+**采纳：** TypeScript 严格模式、MockLLMAdapter、工具风险等级、可插拔 ResultParser、SSE、`sql.js`、npm workspaces、Vitest。
 
-记忆实现使用 `sql.js`，避免 Windows 原生 SQLite 编译依赖。Task 2 进一步证明“表里有 project_path”不等于隔离完成：搜索、删除、AgentLoop retrieval 和 Server production injection 都必须携带同一项目身份。
+**推翻或缩减：**
 
-### 反馈闭环
+- React Router：三个视图不需要额外路由框架，使用简单状态切换。
+- WebSocket：服务端到客户端的事件流以 SSE 足够，控制请求仍走 REST。
+- OAuth、插件市场和 Kubernetes：不符合单用户课程项目的最小范围。
+- Harness 自动生成补丁：破坏确定性机制与 LLM 创造性职责分离。
+- 完整 CLI：最终收缩为启动本地 Server/WebUI 的薄入口。
 
-预先排队两个 mock 响应只能证明顺序，不能证明反馈导致修正。Task 3 让 selector 只观察实际发送给 LLM 的 request view；第二动作只有在消息包含结构化失败与 actionable fix 时才出现。
+## 3. 初始 PLAN 与实现前纪律
 
-### 分发
+`188482d` 将工作分为 monorepo、LLM、工具、治理、反馈、记忆/配置、AgentLoop、Server/WebUI 和收尾阶段，共 62 个 task。Git 历史显示代码在 SPEC/PLAN 提交之后开始，并以细粒度 commit 推进。
 
-CLI 原先依赖 monorepo 布局；Task 4 改为通过 `@harness/server` 的 exports 解析安装入口，并让 Server build 清理旧 chunk。这里发生了重要偏差：指定的完整自动 clean-install 在受限安装阶段超时，不能宣布自动验收成功。用户后来完成一次人工 clean-install、健康页、WebUI 和停止监听验证，这两类证据被明确分开。
+但与课程流程相比存在两个重要偏差：
 
-### 凭据测试
+1. **陌生智能体冷启动没有在正式实现前完成。** 规定要求先用不同类型的新 agent 仅凭 SPEC/PLAN 实现 1–2 个 task；本项目在主体实现后才补做。后补验证仍发现真实缺陷，但不能改写成“实现前已通过”。
+2. **初期未按每个功能建立 worktree/PR。** 7 月 25 日的阶段直接在线性 `master` 历史上完成；8 月 7 日创建的 Phase 1–9 回溯分支/PR只是提交展示补救，不能等同于原生 worktree 开发。
 
-2026-08-13 的批准设计取代了以下历史加密文件方案：生产代码已删除 `HARNESS_CREDENTIALS_FILE`、主密码和 `credentials.enc`，测试通过注入的 keyring port 或显式禁用原生 keyring，绝不触碰真实用户凭据。自动打包安装生命周期现已闭合。
+## 4. 2026-08-03：陌生智能体冷启动（实现后补做）
 
-历史 Task 5 曾使用隔离加密文件 seam；该实现已被 2026-08-13 批准的 OS keyring 设计完全删除。当前测试注入 fake keyring，并用 `HARNESS_DISABLE_KEYRING=1` 验证安装包在无 keyring 环境下安全降级，不创建凭据文件。
+### 4.1 验证方式
 
-## 偏差清单
+历史文件记录了两轮补做：第一轮仅进行问题审阅，第二轮让不同 agent 在全新上下文中，仅依据当时的 SPEC/PLAN 尝试 Tasks 6–7（LLMAdapter 与 MockLLMAdapter），并要求遇到不确定处暂停。原始逐字会话和精确耗时不在仓库，因此本文只保留可由旧文档和后续 commit 支持的结论。
 
-| 计划/早期说法 | 实际证据 | 当前处理 |
+### 4.2 暂停点与暴露问题
+
+- Prompt 假设 `types.ts` 已存在，但干净工作区只有文档，说明 task 依赖没有写清。
+- Task 2 与 Task 6 都像是 `LLMAdapter` 的权威定义位置。
+- Task 6 只写 Vitest，无法证明纯 TypeScript interface 存在，需要 `tsc --noEmit`。
+- `MockLLMExhaustedError` 的定义位置、构造方式和错误消息未规定。
+- Mock 响应数组是否复制不明确，`shift()` 可能修改调用方输入。
+- TypeScript/Vitest 依赖在计划中声明过晚，前序任务已需要它们。
+- SPEC 中 Render/Vercel 部署说法互相矛盾。
+- PLAN 顶部测试数字缺少日期和证据范围。
+
+### 4.3 修订
+
+`be10126` 等提交修复了类型权威位置、任务依赖、类型检查与上下文生命周期；`47edb81` 将结果补入过程文档。后来部署方案继续演进，因此 Render 修订不是最终状态。
+
+### 4.4 冷启动结论
+
+仅对话审阅发现的问题少于真实实现。最有价值的反馈不是“agent 是否理解大意”，而是它在创建文件、编译和测试时在哪里必须猜测。与此同时，本项目补做时机不合规，应在反思中把它作为方法失败，而不是成功包装。
+
+## 5. 2026-08-03 至 2026-08-09：安全、公开体验与凭据规约演进
+
+### 5.1 WebUI 与部署方向
+
+初始 Web-first 方案先考虑托管平台，后改为国内云主机容器方案（均为已废弃的历史设计）。2026-08-08 的安全设计进一步认识到：让 Shell/Git/真实 LLM Harness 接受互联网请求不满足隔离和凭据边界。于是形成两级运行策略：公开级只允许确定性 demo，本地级才装配完整工具和本地凭据。
+
+2026-08-09 继续把用户体验明确为“三张体验卡，但互联网入口只有 demo 可操作”。服务端 capability 是权威来源；隐藏前端控件不构成安全控制。最终 8 月 13 日又根据“不部署服务器”的决定，把线上方案收窄为纯静态机制演示，完整能力只在 loopback 本地运行。
+
+### 5.2 凭据方案的三次变化
+
+1. **早期机器信息派生加密**：被安全审查否定，因为机器名/用户名不是秘密。
+2. **主密码 + AES-256-GCM 文件**（8 月 9 日设计）：满足显式解锁，但增加主密码状态机、迁移和冗余 UI；后来用户指出配置逻辑不清楚。
+3. **OS keyring + memory-only**（8 月 13 日最终方案）：持久化 Key 进入操作系统凭据库；临时 BYOK 只留在内存；禁用或无 keyring 时明确降级为“仅本次使用”，不创建替代明文/自制密文文件。
+
+这段演进说明“安全”不只是加密算法是否正确，还包括生命周期是否容易解释、是否减少用户误操作，以及测试是否会碰触真实用户凭据。
+
+### 5.3 公开 API 安全设计
+
+8 月 8 日的计划采用 app factory、RuntimePolicy、Server-owned session/workspace、瞬时 BYOK 和进程内 deterministic demo。实现阶段的多轮 review 又补上 session race、迟到响应、BYOK 生命周期和 demo 写入竞争。由此确认：前端禁用、正则清洗或路由前检查都不是最终安全边界；能力必须在服务端注册表、会话所有权和最终工具 dispatch 同时收紧。
+
+## 6. 2026-08-12：最终交付加固规约
+
+`72993d7` 和 `153b8f7` 分别提交 final-delivery design/plan。该轮使用独立 worktree `codex/final-delivery`，基线为 `0fb39b8`，并把风险拆为可独立验证的任务：
+
+1. dangerous risk 是否进入最终治理；
+2. memory 是否在 SQL、AgentLoop、Server 全链路项目隔离；
+3. feedback 是否因结构化失败真正改变下一动作；
+4. 安装后的 CLI 是否脱离 monorepo 布局；
+5. 凭据测试是否隔离真实用户环境；
+6. 文档 claim 是否都有当前证据；
+7. CI/package 是否验证实际入口；
+8. 最终验收是否区分自动与人工证据。
+
+该轮 briefs/reports 保存了 RED、GREEN 和 review 修复。典型变化包括：批准必须精确绑定并一次消费；记忆删除也必须按项目隔离；反馈测试不能用无条件 FIFO 假装因果；package manifest 成功不能推出 clean install/start/stop 成功。
+
+分支完成时，学生在 finishing 技能给出的选项中选择本地合并，形成 `ebc225f`，没有为最终加固新建 PR。该选择已获当时明确授权，但仍偏离课程推荐的“每个 worktree 对应 PR”。
+
+## 7. 2026-08-13：本地优先最终方案与真实预览反馈
+
+### 7.1 用户决策推动的规约变化
+
+用户明确不部署服务器，并要求解决主密码/Provider 冗余逻辑和生成文件长期保存。因此 `8e4cb9f`、`fdcc5c4` 将交付收敛为：
+
+- 本地 loopback WebUI 提供完整能力；
+- 线上只提供无 Key、无 Shell/Git、无真实 LLM 的静态机制演示；
+- 凭据用 OS keyring，临时 Key 仅在内存；
+- 会话 workspace 是隔离临时区，长期产物必须显式保存到项目 `.harness/outputs/<session-id>/`；
+- 保存/导出校验路径、普通文件、大小和 SHA-256，public 模式禁止持久化。
+
+### 7.2 本地预览暴露的实现—规约缝隙
+
+真实 WebUI 预览发现：工具写出的文件没有进入 ArtifactTracker；npm workspace 启动使项目根目录解析错误；完成会话被 sweep 立即移除导致导出失败；配置测试错误分类不够可行动。对应修复为 `badd838`、`343fe78`、`bf4693e`、`dc7d52e`。
+
+这些问题说明单元测试通过仍不足以证明真实入口闭环。规约后来明确区分：
+
+- workspace 文件只是临时执行状态；
+- ArtifactTracker 登记是可导出的前提；
+- completed/failed session 在 `expiresAt` 前必须保留元数据供保存/导出；
+- “测试连接失败”必须区分认证、余额/计费、限流、上游故障和本机网络。
+
+### 7.3 干净 CI 与 Pages 修正
+
+本地存在旧 `dist`，一度掩盖 CLI 对 `@harness/server` 类型的干净环境依赖；GitHub runner 暴露后由 `13236a3` 修正。随后发现 CI trigger 接受 `master`，但 Pages deploy condition 只允许 `main`，由 `bf88990` 修正并加入回归断言。CI 状态可通过公开徽章核验；Pages 是否启用属于仓库外部设置，不能仅凭 workflow 文件宣称 URL 已可访问。
+
+## 8. Brainstorming 与 Superpowers 方法反思
+
+### 做得好的地方
+
+- 接口优先和 Mock 优先让核心机制无需真实 API 即可测试。
+- 细粒度 task、RED/GREEN 和 review 在安全加固阶段确实发现了 Registry 绕过、批准复用、跨项目删除和异步生命周期缺陷。
+- 陌生 agent 的真实实现比静态审阅更能发现隐藏依赖和验证命令错误。
+- 把设计决策写入独立 spec/plan，使后续能够追踪凭据和部署方案为何被替代。
+
+### 不足与批判
+
+- 初始 brainstorming 对部署过于乐观，先讨论“放在哪里”，晚于“公网是否应该拥有这些能力”。
+- 原始 62-task PLAN 粒度很细，但没有先完成规定冷启动；形式上的详细不等于可由陌生 agent 执行。
+- subagent/worktree/PR 纪律在初期没有落实，后建回溯 PR只能展示差异，无法恢复真实协作过程。
+- 多轮安全修复说明单一 task 的“完成”容易只覆盖局部边界；最终执行点、并发状态和真实安装入口需要专门验收。
+- 技能流程有时把文档数量和检查点增加得很快；若没有证据分级，会诱导把历史摘要写成过度确定的故事。
+
+## 9. 主要偏差清单
+
+| 课程/早期要求 | 实际过程 | 当前处理 |
 | --- | --- | --- |
-| 公开入口不运行完整产品（旧说法已否定） | 运行时策略把 public 限制为固定 demo | 文档统一为 local 完整、public 演示 |
-| 指定外部地址可访问 | 当前任务未验证任何地址 | 移除地址与上线保证 |
-| 原生 SQLite driver | package 和实现使用 `sql.js` | SPEC/README 统一为 `sql.js` |
-| Task 4 自动 clean-install 已闭合 | 早期运行超时；当前 CLI 生命周期 4/4 | 当前状态已闭合，保留历史偏差说明 |
-| Task 5 使用加密文件 | 已迁移为 OS keyring + memory-only | 删除生产文件 seam，测试只注入 fake port |
-| 旧冷启动记录证明从零复现 | 仓库只有叙述，缺少可独立核验的原始会话证据 | 明确标为历史自述，不作为当前验收 |
+| 实现前完成陌生 agent 冷启动 | 主体实现后补做 | 如实标为方法偏差，保留发现与修订证据 |
+| 每个功能使用 worktree/PR | 初期直接在 `master`；后建回溯 PR | 不把回溯 PR等同于原生流程 |
+| 完整公网 WebUI | 安全模型不支持公网完整工具执行 | 最终为本地完整版 + 线上静态演示 |
+| 主密码加密文件 | UI/生命周期冗余且被用户否定 | 最终迁移为 OS keyring + memory-only |
+| 本次 final worktree 对应 PR | 学生选择本地 merge | 记录选择与课程推荐的偏差 |
+| Pages 地址可用 | workflow 已修正，但外部 Pages 开关需另验 | 不预填或保证未验证 URL |
 
-## 本轮没有执行的操作
+## 10. 可复用教训
 
-### 最终分支集成偏差
-
-`finishing-a-development-branch` 在全量验证后提供“本地合并 / 推送并创建 PR / 保留分支”三种选择，学生明确选择本地合并。因此 `codex/final-delivery` 通过 merge commit 合入 `master`，没有为本次收尾创建新 PR。这与课程推荐的“每个 worktree 对应 PR”存在偏差；原因与决策已如实记录，早期功能仍保留其原有分支/PR/commit 历史。本次后续上传不得改写或压平历史。
-
-- 截至本段首次记录时未发布 npm package 或 release；随后由用户明确要求完成 Git 上传。
-- 未将真实 API Key 写入仓库；本地预览只通过系统凭据库读取并返回非秘密认证分类。
-- 未修改 `REFLECTION.md`，也未代写学生反思。
-- 未把旧测试总数、外部操作或无法复现的会话细节包装成事实。
-
-## 可复用教训
-
-1. 文档状态必须绑定命令、日期和 commit；“全部完成”会掩盖局部自动化间隙。
-2. 安全边界要测试最终执行点，而不是只 grep 配置或断言 helper。
-3. 反馈测试必须证明因果关系，不只是先后顺序。
-4. 环境隔离 seam 应保持默认生产行为不变，并在测试中验证 fallback 没有被触碰。
-5. 人工端到端成功有价值，但必须与自动化可重复性分别记录。
-6. 无法从仓库核验的旧流程应被标注，而不是用更流畅的故事补齐。
+1. 规约完整性既要求覆盖全生命周期，也要求标明历史证据等级；二者不能相互替代。
+2. 冷启动必须在实现前做，并要求陌生 agent 真正编译和测试，而非只阅读提问。
+3. 安全边界要从能力注册、会话所有权、最终 dispatch 和持久化路径共同验证。
+4. 反馈测试必须证明因果；安装测试必须从 tarball 到启动、HTTP 和停止形成闭环。
+5. 临时 workspace、可导出 artifact 和长期保存 output 是三个不同状态，文档与 UI 都要明确。
+6. 当前状态应与历史方案分层书写，避免已废弃的主密码、服务器部署和测试数字重新成为产品承诺。
