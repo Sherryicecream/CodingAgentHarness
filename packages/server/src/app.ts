@@ -67,15 +67,10 @@ export interface AppOptions {
 }
 
 const disabledCredentialStore = (): CredentialStore => ({
-  getState: () => 'empty',
-  unlock: () => false,
-  lock: () => undefined,
-  initialize: () => { throw new Error('Credential store is disabled by runtime policy'); },
-  hasKey: () => { throw new Error('Credential store is disabled by runtime policy'); },
+  status: () => ({ storage: 'unavailable', hasKey: false }),
   getKey: () => { throw new Error('Credential store is disabled by runtime policy'); },
   setKey: () => { throw new Error('Credential store is disabled by runtime policy'); },
   deleteKey: () => { throw new Error('Credential store is disabled by runtime policy'); },
-  listServices: () => { throw new Error('Credential store is disabled by runtime policy'); },
 });
 
 const MAX_TIMER_MS = 2_147_483_647;

@@ -100,12 +100,10 @@ POST /api/agent/run               -> sessionId, task, mode, local apiKey（仅 l
 
 #### CredentialStore
 
-- 输入：API Key、至少 12 字符主密码和生命周期动作（initialize/update/unlock/lock/clear）。
-- 输出：只含状态的响应；不得返回 Key 或主密码。
-- 边界：默认文件是 `~/.harness/credentials.enc`，使用 `scrypt` 与 AES-256-GCM；重启后为 locked。
-- 错误：错误主密码解锁返回失败，锁定状态写入显式失败。现有但无法解析的 envelope 被识别为 `legacy`，本地 `POST /key` 初始化流程可用新主密码与 Key 覆盖它；它不会被单独报告为“损坏文件”。响应仍经过 secret redaction。
-
-`HARNESS_CREDENTIALS_FILE` 是**仅供本地测试隔离的覆盖项**。非空值经 `trim` 后解析为绝对路径并显式传给 CredentialStore；未设置或空白时仍使用 `~/.harness/credentials.enc`。该变量不把凭据变成明文，也不改变加密格式。
+- 输入：DeepSeek API Key 与 set/delete/test 动作。
+- 输出：只含 `{ storage, hasKey }` 状态；不得返回 Key。
+- 边界：持久化只委托当前操作系统账户的凭据库；无主密码、无应用自建凭据文件。凭据库不可用时报告 `unavailable`，并保留请求内存中的“仅本次使用”。
+- 错误：后端不可用返回非秘密错误，响应与日志不得包含 Key。
 
 ### 3.3 `@harness/cli`
 
@@ -121,7 +119,7 @@ POST /api/agent/run               -> sessionId, task, mode, local apiKey（仅 l
 | 项目记忆 | `sql.js` SQLite | Server workspace 内的项目隔离数据库 |
 | 会话 | JSON SessionStore | 本地 `.harness-sessions` |
 | 项目配置 | YAML | 项目 `.harness/config.yaml` |
-| 服务器凭据 | scrypt + AES-256-GCM | `~/.harness/credentials.enc` |
+| 服务器凭据 | 操作系统凭据库 | 当前 OS 用户账户 |
 | BYOK Key | 请求/组件内存 | 运行完成、失败、切换或卸载即清除 |
 
 ### 4.1 工作区文件保留
@@ -131,13 +129,13 @@ Session workspace 的保留策略为：
 - `temporary`（默认）：任务完成或失败后可由 sweep 回收；运行中或未过期的 session 受保护。
 - `preserve`：不会被自动 sweep 删除，直到用户手动清理。
 
-用户主动保存文件使用 `POST /api/agent/sessions/:sessionId/save`。服务端只允许已签发 workspace 的直接子文件，并将副本写入绝对项目目录下的 `.harness/outputs/`；路径穿越、绝对路径、符号链接和非普通文件必须拒绝。`public` 模式必须在访问凭据或文件系统前返回 `403 PERSISTENCE_DISABLED`。
+用户主动导出使用 `POST /api/agent/sessions/:sessionId/save`。服务端按会话清单核对路径、大小和 SHA-256，再原子写入 `.harness/outputs/<session-id>/` 与 `manifest.json`；路径穿越、符号链接、摘要变化和覆盖既有导出必须拒绝。
 
 ### 4.2 Provider 配置边界
 
 本地 Provider 配置以加密凭据存储为后端；Provider adapter factory 只允许受控的本地 allowlist 和固定 HTTPS endpoint，并在 public 模式拒绝创建。该 factory 当前是供后续执行流程使用的安全 seam，尚未接入完整 `run` route 的 Provider 选择或切换；文档不得把它描述为已完成的多 Provider 运行能力。
 
-本地 BYOK 不写入 localStorage、sessionStorage、URL、日志、分析状态或会话。服务器凭据只能由本地用户通过主密码生命周期管理；忘记主密码不能恢复 Key。
+本地“仅本次使用”不写入 localStorage、sessionStorage、URL、日志、分析状态或会话。“记住在此设备”只能由本地用户通过操作系统凭据库管理。
 
 ## 5. 分发与启动
 

@@ -7,17 +7,13 @@ export const startServer = async (): Promise<HarnessApp> => {
   const policy = resolveRuntimePolicy(process.env.HARNESS_MODE);
   let localOptions: Pick<AppOptions, 'credentialStore' | 'sessionStore'> = {};
   if (policy.mode === 'local') {
-    const configuredCredentialsFile = process.env.HARNESS_CREDENTIALS_FILE?.trim();
-    const [{ createCredentialStore }, { createSessionStore }] = await Promise.all([
+    const [{ createCredentialStore }, { loadCredentialKeyring }, { createSessionStore }] = await Promise.all([
       import('./credential-store.js'),
+      import('./credential-keyring.js'),
       import('@harness/core'),
     ]);
     localOptions = {
-      credentialStore: createCredentialStore({
-        filePath: configuredCredentialsFile
-          ? resolve(configuredCredentialsFile)
-          : undefined,
-      }),
+      credentialStore: createCredentialStore({ keyring: await loadCredentialKeyring() }),
       sessionStore: createSessionStore('.harness-sessions'),
     };
   }

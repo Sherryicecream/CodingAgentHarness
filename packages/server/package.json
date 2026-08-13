@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "build:static-demo": "vite build client --outDir ../dist/static-demo --emptyOutDir",
     "dev": "tsx src/server.ts",
     "build": "tsup src/server.ts --format esm --dts --clean && vite build client --emptyOutDir",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -26,6 +27,7 @@
   },
   "dependencies": {
     "@harness/core": "^0.1.0",
+    "@napi-rs/keyring": "^1.3.0",
     "cors": "^2.8.0",
     "express": "^4.21.0",
     "express-rate-limit": "^8.1.0"

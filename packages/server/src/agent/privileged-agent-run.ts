@@ -27,13 +27,11 @@ import type { CredentialStore } from '../credential-store.js';
 import { sanitizeSessionSecrets } from '../security/secret-redactor.js';
 import type { RuntimePolicy } from '../security/runtime-policy.js';
 import type { SSEEvent } from '../sse/sse-manager.js';
-import { createConfiguredProviderAdapter } from '../provider-execution.js';
 
 export interface PrivilegedAgentRunOptions {
   readonly policy: RuntimePolicy;
   readonly credentialStore: CredentialStore;
   readonly byokAdapterFactory?: ByokAdapterFactory;
-  readonly configuredProviderFactory?: typeof createConfiguredProviderAdapter;
 }
 
 const safeProviderStatus = (error: unknown): number | undefined => {
@@ -88,8 +86,8 @@ const createTransientDeepSeekResource: ByokAdapterFactory = (apiKey) => {
 
 export const createPrivilegedAgentRun = (
   options: PrivilegedAgentRunOptions,
-): AgentRun => ({ session, task, mode, emit, apiKey, providerId }) => {
-  const tools = createPolicyToolRegistry(options.policy, session.workspace);
+): AgentRun => ({ session, task, mode, emit, apiKey, artifactTracker }) => {
+  const tools = createPolicyToolRegistry(options.policy, session.workspace, artifactTracker);
   const governance = createGovernanceService();
   const feedback = createFeedbackLoop(
     createTestRunner(),
@@ -106,20 +104,9 @@ export const createPrivilegedAgentRun = (
     byokResource = (options.byokAdapterFactory ?? createTransientDeepSeekResource)(byokSecret);
     llm = byokResource.adapter;
   } else {
-    if (mode === 'server' && providerId) {
-      const resource = (options.configuredProviderFactory ?? createConfiguredProviderAdapter)({
-        credentialStore: options.credentialStore,
-        policy: options.policy,
-      }, providerId);
-      byokResource = resource;
-      llm = resource.adapter;
-    }
-    if (llm) {
-      // configured provider selected
-    } else {
     let serverApiKey = '';
     if (mode === 'server' && options.policy.allowServerCredentials) {
-      serverApiKey = options.credentialStore.getKey('harness/deepseek-api-key') || '';
+      serverApiKey = options.credentialStore.getKey() || '';
     }
     llm = serverApiKey
       ? new DeepSeekAdapter({
@@ -138,7 +125,6 @@ export const createPrivilegedAgentRun = (
         { content: 'Task completed.', toolCalls: [] },
       ]);
     serverApiKey = '';
-    }
   }
   let loop: AgentLoop | undefined = createAgentLoop({
     llm,

@@ -197,7 +197,6 @@ test('CLI bin metadata names a Node entry rather than a Windows command wrapper'
 test('packed CLI node entry serves health JSON and the packaged Web UI', { timeout: 60_000 }, async () => {
   const packedDirectory = await mkdtemp(join(tmpdir(), 'harness-packed-'));
   const installDirectory = await mkdtemp(join(tmpdir(), 'harness-installed-'));
-  const credentialsFile = join(installDirectory, 'credentials', 'credentials.enc');
   const npmEnvironment = {
     ...process.env,
     npm_config_audit: 'false',
@@ -249,7 +248,7 @@ test('packed CLI node entry serves health JSON and the packaged Web UI', { timeo
       cwd: installDirectory,
       env: {
         ...withoutCredentialEnvironment(inheritedEnvironment),
-        HARNESS_CREDENTIALS_FILE: credentialsFile,
+        HARNESS_DISABLE_KEYRING: '1',
         HOST: '127.0.0.1',
         PORT: String(port),
       },
@@ -266,8 +265,7 @@ test('packed CLI node entry serves health JSON and the packaged Web UI', { timeo
     assert.deepEqual(await healthResponse.json(), { status: 'ok', mode: 'local' });
     const configResponse = await fetch(`${expectedUrl}/api/config/status`);
     assert.equal(configResponse.status, 200);
-    assert.deepEqual(await configResponse.json(), { hasKey: false, source: 'none', state: 'empty' });
-    await assert.rejects(readFile(credentialsFile), { code: 'ENOENT' });
+    assert.deepEqual(await configResponse.json(), { storage: 'unavailable', hasKey: false });
     const webUiResponse = await fetch(expectedUrl);
     assert.equal(webUiResponse.status, 200);
     assert.match(await webUiResponse.text(), /<div id="root"><\/div>/);

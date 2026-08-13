@@ -9,15 +9,10 @@ import { PUBLIC_RUNTIME_POLICY } from '../../src/security/runtime-policy.js';
 const workspaces: string[] = [];
 
 const credentialStore: CredentialStore = {
-  getState: () => 'empty',
-  unlock: () => false,
-  lock: () => undefined,
-  initialize: () => undefined,
-  hasKey: () => false,
+  status: () => ({ storage: 'keyring', hasKey: false }),
   getKey: () => null,
   setKey: () => undefined,
-  deleteKey: () => undefined,
-  listServices: () => [],
+  deleteKey: () => false,
 };
 
 afterEach(() => {

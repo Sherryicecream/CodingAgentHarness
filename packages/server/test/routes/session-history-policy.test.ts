@@ -17,15 +17,10 @@ const createRoot = async (): Promise<string> => {
 };
 
 const emptyCredentials: CredentialStore = {
-  getState: () => 'empty',
-  unlock: () => false,
-  lock: () => undefined,
-  initialize: () => undefined,
-  hasKey: () => false,
+  status: () => ({ storage: 'keyring', hasKey: false }),
   getKey: () => null,
   setKey: () => undefined,
-  deleteKey: () => undefined,
-  listServices: () => [],
+  deleteKey: () => false,
 };
 
 const completedSession: Session = {

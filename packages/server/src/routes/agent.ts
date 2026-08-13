@@ -28,12 +28,13 @@ import {
 } from '../session/session-registry.js';
 import type { SSEEvent, SSEManager } from '../sse/sse-manager.js';
 import type { WorkspaceManager } from '../session/workspace-manager.js';
+import { exportArtifacts } from '../session/artifact-exporter.js';
 
 const DEFAULT_RUN_RATE_WINDOW_MS = 60 * 60 * 1_000;
 const DEFAULT_RUN_RATE_LIMIT = 20;
 const DEFAULT_SESSION_RATE_LIMIT = 20;
 const MAX_TASK_LENGTH = 1_000;
-const RUN_FIELDS = new Set(['sessionId', 'task', 'mode', 'apiKey', 'providerId']);
+const RUN_FIELDS = new Set(['sessionId', 'task', 'mode', 'apiKey']);
 
 export interface RunRateLimitOptions {
   readonly windowMs?: number;
@@ -82,14 +83,13 @@ interface ValidatedRunRequest {
   readonly task: string;
   readonly mode: RuntimeExperience;
   readonly apiKey?: string;
-  readonly providerId?: string;
 }
 
 const validateRunRequest = (body: unknown): ValidatedRunRequest | null => {
   if (!isPlainObject(body) || Object.keys(body).some((key) => !RUN_FIELDS.has(key))) {
     return null;
   }
-  const { sessionId, task, mode, apiKey, providerId } = body;
+  const { sessionId, task, mode, apiKey } = body;
   if (
     typeof sessionId !== 'string'
     || sessionId.length === 0
@@ -98,13 +98,12 @@ const validateRunRequest = (body: unknown): ValidatedRunRequest | null => {
     || task.length > MAX_TASK_LENGTH
     || typeof mode !== 'string'
     || (apiKey !== undefined && typeof apiKey !== 'string')
-    || (providerId !== undefined && (typeof providerId !== 'string' || providerId.length === 0))
     || (mode === 'byok' && (typeof apiKey !== 'string' || apiKey.length === 0))
     || (mode !== 'byok' && apiKey !== undefined)
   ) {
     return null;
   }
-  return { sessionId, task, mode: mode as RuntimeExperience, apiKey, providerId };
+  return { sessionId, task, mode: mode as RuntimeExperience, apiKey };
 };
 
 const toRunHandle = (
@@ -512,7 +511,7 @@ export const createAgentRouter = (
         task: input.task,
         mode: input.mode,
         apiKey: input.apiKey,
-        providerId: input.providerId,
+        artifactTracker: dependencies.sessionRegistry.getArtifactTracker(session.id, clientKey),
         emit: emitWhileActive,
       }));
     } catch {
@@ -539,21 +538,38 @@ export const createAgentRouter = (
       return;
     }
     const sessionId = req.params.sessionId;
-    const fileName = isPlainObject(req.body) ? req.body.fileName : undefined;
-    if (typeof fileName !== 'string' || fileName.length === 0 || !dependencies.sessionRegistry.getAuthorized(sessionId, normalizeClientKey(req))) {
+    const clientKey = normalizeClientKey(req);
+    const session = dependencies.sessionRegistry.getAuthorized(sessionId, clientKey);
+    if (!isPlainObject(req.body) || Object.keys(req.body).length !== 0 || !session) {
       res.status(404).json({ error: 'SESSION_NOT_FOUND' });
       return;
     }
     try {
-      const destination = await dependencies.workspaceManager.saveIssuedFile(
+      const result = await exportArtifacts({
         sessionId,
-        fileName,
-        dependencies.workspaceRoot,
-      );
-      const session = dependencies.sessionRegistry.preserve(sessionId, normalizeClientKey(req));
-      res.status(201).json({ sessionId, retention: session.retention, path: destination });
+        workspace: dependencies.workspaceManager.assertIssued(sessionId, session.workspace),
+        projectRoot: dependencies.workspaceRoot,
+        artifacts: dependencies.sessionRegistry.listArtifacts(sessionId, clientKey),
+      });
+      res.status(201).json({ sessionId, destination: result.destination, manifest: result.manifest });
     } catch {
-      res.status(400).json({ error: 'FILE_SAVE_FAILED' });
+      res.status(400).json({ error: 'ARTIFACT_EXPORT_FAILED' });
+    }
+  });
+
+  router.get('/sessions/:sessionId/artifacts', (req: Request, res: Response) => {
+    try {
+      const artifacts = dependencies.sessionRegistry.listArtifacts(
+        req.params.sessionId,
+        normalizeClientKey(req),
+      );
+      res.json({ sessionId: req.params.sessionId, artifacts });
+    } catch (error) {
+      if (error instanceof SessionNotFoundError) {
+        res.status(404).json({ error: 'SESSION_NOT_FOUND' });
+        return;
+      }
+      res.status(500).json({ error: 'ARTIFACT_LIST_FAILED' });
     }
   });
 

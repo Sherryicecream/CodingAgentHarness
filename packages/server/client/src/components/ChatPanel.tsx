@@ -5,6 +5,7 @@ import { ToolCallCard } from './ToolCallCard.js';
 import { GuardrailDialog } from './GuardrailDialog.js';
 import { FeedbackTimeline } from './FeedbackTimeline.js';
 import { appendPublicSession, type PublicSessionHistory } from '../history/public-history.js';
+import { ArtifactExport } from './ArtifactExport.js';
 
 interface BrowserSecurityInfo {
   isSecureContext: boolean;
@@ -23,19 +24,10 @@ export const isByokBrowserAllowed = (info: BrowserSecurityInfo): boolean => (
   info.isSecureContext || LOOPBACK_HOSTS.has(info.hostname.toLowerCase())
 );
 
-export async function saveSessionFile(sessionId: string, fileName: string): Promise<{ path: string }> {
-  const response = await fetch(`/api/agent/sessions/${encodeURIComponent(sessionId)}/save`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fileName }),
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof body?.error === 'string' ? body.error : 'FILE_SAVE_FAILED');
-  return body as { path: string };
-}
-
 const experienceLabel = (experience: RuntimeExperience): string => {
   if (experience === 'demo') return '安全演示';
-  if (experience === 'byok') return '使用自己的 API Key';
-  return '本地服务器凭据';
+  if (experience === 'byok') return '仅本次使用';
+  return '记住在此设备';
 };
 
 const defaultExperience = (runtime: RuntimeSession): RuntimeExperience => (
@@ -81,9 +73,6 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
   const [apiKey, setApiKey] = useState('');
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
-  const [saveFileName, setSaveFileName] = useState('');
-  const [saveStatus, setSaveStatus] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
   const activeRun = useRef(false);
   const mounted = useRef(true);
   const runGeneration = useRef(0);
@@ -175,17 +164,6 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
     setRunning(false);
     setApiKey('');
     close();
-  };
-
-  const handleSave = async () => {
-    if (!sessionId || !saveFileName.trim() || saving || runtimeInfo.mode !== 'local') return;
-    setSaving(true); setSaveStatus(null);
-    try {
-      const result = await saveSessionFile(sessionId, saveFileName.trim());
-      setSaveStatus(`Saved to ${result.path}`);
-    } catch (error: unknown) {
-      setSaveStatus(`Save failed: ${error instanceof Error ? error.message : 'FILE_SAVE_FAILED'}`);
-    } finally { setSaving(false); }
   };
 
   const handleSubmit = async (requestedTask?: string) => {
@@ -318,7 +296,7 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
 
       {!byokAllowed && !runtimeInfo.capabilities.allowHttpByok && runtimeInfo.capabilities.allowByok && (
         <p className="security-notice" role="note">
-          使用自己的 API Key 需要 HTTPS；仅 localhost、127.0.0.1 和 ::1 可在 HTTP 下开发调试。
+          仅本次使用 需要 HTTPS；仅 localhost、127.0.0.1 和 ::1 可在 HTTP 下开发调试。
         </p>
       )}
 
@@ -565,13 +543,7 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
 
       {isComplete && (
         <div className="card completion-note">
-          {runtimeInfo.mode === 'local' && <div className="save-file-panel">
-            <p>Long-term save: enter a relative workspace file path. It will be copied to the project <code>.harness/outputs/</code>.</p>
-            <label htmlFor="save-file-name">File path</label>
-            <input id="save-file-name" value={saveFileName} onChange={(event) => setSaveFileName(event.target.value)} placeholder="src/example.ts" disabled={saving} />
-            <button className="btn btn-secondary" onClick={() => void handleSave()} disabled={!saveFileName.trim() || saving}>{saving ? 'Saving…' : 'Save to project'}</button>
-            {saveStatus && <div role="status" className="save-status">{saveStatus}</div>}
-          </div>}
+          {runtimeInfo.mode === 'local' && sessionId && <ArtifactExport sessionId={sessionId} />}
           文件保存在隔离工作区：<code>{runtimeInfo.workspaceRoot ?? '&lt;工作区&gt;'}\{sessionId}\</code>
         </div>
       )}

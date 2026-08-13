@@ -89,15 +89,10 @@ describe('public demo route', () => {
     const events: SSEEvent[] = [];
     const credentialAccess = vi.fn((): never => { throw new Error('CREDENTIAL_SENTINEL_CALLED'); });
     const credentialStore: CredentialStore = {
-      getState: credentialAccess,
-      unlock: credentialAccess,
-      lock: credentialAccess,
-      initialize: credentialAccess,
-      hasKey: credentialAccess,
+      status: credentialAccess,
       getKey: credentialAccess,
       setKey: credentialAccess,
       deleteKey: credentialAccess,
-      listServices: credentialAccess,
     };
     const sseManager: SSEManager = {
       createConnection: () => undefined,

@@ -162,14 +162,14 @@ describe('runtime-owned public and local surfaces', () => {
 
     expect(screen.getByRole('button', { name: '配置' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '历史' })).toBeTruthy();
-    expect(screen.getByRole('radio', { name: '本地服务器凭据' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: '记住在此设备' })).toBeTruthy();
     expect((screen.getByRole('radio', { name: '安全演示' }) as HTMLInputElement).disabled).toBe(false);
-    expect((screen.getByRole('radio', { name: '使用自己的 API Key' }) as HTMLInputElement).disabled).toBe(false);
-    expect((screen.getByRole('radio', { name: '本地服务器凭据' }) as HTMLInputElement).disabled).toBe(false);
+    expect((screen.getByRole('radio', { name: '仅本次使用' }) as HTMLInputElement).disabled).toBe(false);
+    expect((screen.getByRole('radio', { name: '记住在此设备' }) as HTMLInputElement).disabled).toBe(false);
     expect(screen.getByText('进程工具：启用')).toBeTruthy();
 
     await userEvent.click(screen.getByRole('button', { name: '配置' }));
-    await screen.findByText('第 1 步：凭据状态');
+    await screen.findByText('选择使用方式');
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === '/api/config/status')).toBe(true);
   });
 
@@ -195,7 +195,7 @@ describe('runtime-owned public and local surfaces', () => {
     window.history.replaceState({}, '', '/config');
     const fetchSpy = installFetch(publicSession());
     render(<App />);
-    await screen.findByText('公共演示模式不会接收或保存 API Key。');
+    await screen.findByText('在线演示不会接收或保存 API Key。');
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/config/'))).toBe(false);
   });
 });
@@ -204,7 +204,7 @@ describe('BYOK browser boundary', () => {
   it('disables BYOK on an insecure non-loopback origin with an HTTPS explanation', async () => {
     await renderLoadedApp(localSession());
 
-    const byok = screen.getByRole('radio', { name: '使用自己的 API Key' }) as HTMLInputElement;
+    const byok = screen.getByRole('radio', { name: '仅本次使用' }) as HTMLInputElement;
     expect(byok.disabled).toBe(true);
     expect(screen.getByText(/HTTPS/)).toBeTruthy();
   });
@@ -213,7 +213,7 @@ describe('BYOK browser boundary', () => {
     Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
     await renderLoadedApp(localSession());
 
-    expect((screen.getByRole('radio', { name: '使用自己的 API Key' }) as HTMLInputElement).disabled).toBe(false);
+    expect((screen.getByRole('radio', { name: '仅本次使用' }) as HTMLInputElement).disabled).toBe(false);
   });
 
   it.each(['localhost', '127.0.0.1', '::1', '[::1]'])(
@@ -303,7 +303,7 @@ describe('server-session-first run flow', () => {
     const { unmount } = render(
       <ChatPanel runtimeInfo={localSession()} acquireSession={() => pendingSession} />,
     );
-    await userEvent.click(screen.getByRole('radio', { name: '使用自己的 API Key' }));
+    await userEvent.click(screen.getByRole('radio', { name: '仅本次使用' }));
     await userEvent.type(screen.getByLabelText('DeepSeek API Key'), 'arbitrary-format-secret');
     await userEvent.type(screen.getByLabelText('任务'), 'deferred task');
     await userEvent.click(screen.getByRole('button', { name: '开始运行' }));
@@ -423,7 +423,7 @@ describe('transient key lifecycle', () => {
     });
     render(<App />);
     await screen.findByText('本地可信模式');
-    await userEvent.click(screen.getByRole('radio', { name: '使用自己的 API Key' }));
+    await userEvent.click(screen.getByRole('radio', { name: '仅本次使用' }));
     await userEvent.type(screen.getByLabelText('DeepSeek API Key'), key);
     await userEvent.type(screen.getByLabelText('任务'), 'safe byok task');
     await userEvent.click(screen.getByRole('button', { name: '开始运行' }));
@@ -448,7 +448,7 @@ describe('transient key lifecycle', () => {
   it('clears the key on mode switch and every connection or terminal failure path', async () => {
     Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
     await renderLoadedApp(localSession());
-    const byok = screen.getByRole('radio', { name: '使用自己的 API Key' });
+    const byok = screen.getByRole('radio', { name: '仅本次使用' });
     const demo = screen.getByRole('radio', { name: '安全演示' });
     await userEvent.click(byok);
     const keyInput = screen.getByLabelText('DeepSeek API Key') as HTMLInputElement;
@@ -468,7 +468,7 @@ describe('transient key lifecycle', () => {
   it('clears the key on a terminal SSE error and closes the stream', async () => {
     Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true });
     await renderLoadedApp(localSession());
-    await userEvent.click(screen.getByRole('radio', { name: '使用自己的 API Key' }));
+    await userEvent.click(screen.getByRole('radio', { name: '仅本次使用' }));
     await userEvent.type(screen.getByLabelText('DeepSeek API Key'), 'sk-test-terminal');
     await userEvent.type(screen.getByLabelText('任务'), 'terminal task');
     await userEvent.click(screen.getByRole('button', { name: '开始运行' }));
@@ -492,7 +492,7 @@ describe('transient key lifecycle', () => {
         acquireSession={async () => { throw new Error('SESSION_ISSUE_FAILED'); }}
       />,
     );
-    await userEvent.click(screen.getByRole('radio', { name: '使用自己的 API Key' }));
+    await userEvent.click(screen.getByRole('radio', { name: '仅本次使用' }));
     await userEvent.type(screen.getByLabelText('DeepSeek API Key'), 'sk-test-session-failure');
     await userEvent.type(screen.getByLabelText('任务'), 'session failure task');
     await userEvent.click(screen.getByRole('button', { name: '开始运行' }));
@@ -507,7 +507,7 @@ describe('transient key lifecycle', () => {
     installFetch(localSession(), () => jsonResponse({ error: 'RUN_START_FAILED' }, 500));
     render(<App />);
     await screen.findByText('本地可信模式');
-    await userEvent.click(screen.getByRole('radio', { name: '使用自己的 API Key' }));
+    await userEvent.click(screen.getByRole('radio', { name: '仅本次使用' }));
     await userEvent.type(screen.getByLabelText('DeepSeek API Key'), 'sk-test-run-failure');
     await userEvent.type(screen.getByLabelText('任务'), 'run failure task');
     await userEvent.click(screen.getByRole('button', { name: '开始运行' }));

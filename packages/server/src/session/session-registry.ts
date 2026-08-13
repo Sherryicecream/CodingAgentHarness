@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { WorkspaceManager } from './workspace-manager.js';
+import { createArtifactTracker, type ArtifactRecord, type ArtifactTracker } from './artifact-tracker.js';
 
 export const DEFAULT_SESSION_TTL_MS = 60 * 60 * 1_000;
 export const DEFAULT_MAX_CONCURRENT_SESSIONS = 2;
@@ -25,6 +26,7 @@ interface SessionRecord {
   readonly createdAt: number;
   readonly expiresAt: number;
   readonly retention: WorkspaceRetention;
+  readonly artifactTracker: ArtifactTracker;
 }
 
 export interface SessionRegistryOptions {
@@ -47,6 +49,8 @@ export interface SessionRegistry {
   complete(id: string, clientKey: string): PublicSession;
   fail(id: string, clientKey: string): PublicSession;
   preserve(id: string, clientKey: string): PublicSession;
+  listArtifacts(id: string, clientKey: string): readonly ArtifactRecord[];
+  getArtifactTracker(id: string, clientKey: string): ArtifactTracker;
 }
 
 export class ConcurrentSessionLimitError extends Error {
@@ -166,6 +170,7 @@ export const createSessionRegistry = (
           createdAt,
           expiresAt: createdAt + ttlMs,
           retention: 'temporary',
+          artifactTracker: createArtifactTracker({ now }),
         };
         records.set(id, record);
         return toPublicSession(record);
@@ -243,6 +248,14 @@ export const createSessionRegistry = (
       const updated = { ...record, retention: 'preserve' as const };
       records.set(id, updated);
       return toPublicSession(updated);
+    },
+
+    listArtifacts(id, clientKey) {
+      return ownedRecord(id, clientKey).artifactTracker.list();
+    },
+
+    getArtifactTracker(id, clientKey) {
+      return ownedRecord(id, clientKey).artifactTracker;
     },
   };
 };

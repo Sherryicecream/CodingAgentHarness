@@ -11,7 +11,7 @@ export const handleTestKey = async (
   _req: Request,
   res: Response,
 ): Promise<void> => {
-  const apiKey = dependencies.credentialStore.getKey('harness/deepseek-api-key')
+  const apiKey = dependencies.credentialStore.getKey()
     ?? process.env.DEEPSEEK_API_KEY;
   if (!apiKey) {
     res.json({ valid: false, error: 'API_KEY_NOT_CONFIGURED' });

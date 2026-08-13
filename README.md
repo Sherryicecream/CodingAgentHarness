@@ -86,9 +86,9 @@ npm.cmd run test --workspace @harness/server -- test/demo
 本地模式提供两种真实 LLM 凭据路径：
 
 1. **本地 BYOK 会话**：Key 由本地浏览器交给本地服务端，只存在于当前组件/请求生命周期；不写入浏览器持久存储、URL、日志或会话记录。
-2. **本地服务器凭据**：Key 写入 `~/.harness/credentials.enc`。用户提供至少 12 个字符的主密码，服务端使用 `scrypt` 派生密钥并以 AES-256-GCM 加密。重启后必须解锁；可更新、锁定或清除。忘记主密码时不能恢复原 Key。
+2. **记住在此设备**：Key 交给当前操作系统账户的凭据库。应用不回显 Key；凭据库不可用时不会创建替代文件，仍可选择“仅本次使用”。
 
-主密码不会替代 API Key，也不应写入环境文件或 Git。`DEEPSEEK_API_KEY` 是明确的本地/运维配置来源；默认的交互式服务器凭据仍使用加密文件。
+无需设置 Harness 主密码。不要把 API Key 写入环境文件或 Git；`DEEPSEEK_API_KEY` 仍是显式本地运行时配置来源。
 
 ## 运行模式能力
 
@@ -97,7 +97,7 @@ npm.cmd run test --workspace @harness/server -- test/demo
 | 固定确定性场景 | 是 | 可选 |
 | 真实 LLM | 否 | 是，需本地凭据 |
 | BYOK | 禁用 | 本地会话内存 |
-| 服务器加密凭据 | 禁用 | 主密码保护 |
+| 系统凭据库 | 禁用 | 当前操作系统账户 |
 | 文件/Shell/测试/Git 工具 | 进程工具禁用 | 完整工具集，受治理约束 |
 | 推荐监听地址 | `127.0.0.1` 用于验证 | `127.0.0.1`，不得外露 |
 
@@ -137,13 +137,13 @@ npm.cmd run build
 
 - 危险工具由注册元数据与命令内容共同治理；批准绑定到不可变动作且只能消费一次。
 - 公开演示事件使用结构化 allowlist 投影，避免回显任意输入。
-- 不要提交真实 Key、主密码、`.env` 或凭据文件。
+- 不要提交真实 Key、`.env` 或凭据文件。
 - 不要把本地可信模式暴露给其他用户或不受信网络。
 
 ## 文件保留与导出
 
-任务工作区默认使用 `temporary` 策略：任务完成或失败后由服务端回收。需要长期保留时，用户必须主动调用保存操作；文件会复制到当前项目下的 `.harness/outputs/`，并将工作区标记为 `preserve`。`preserve` 文件不会被后台 sweep 自动删除，只能由用户手动清理。
+任务工作区是临时空间。“导出全部产物”会验证本次会话记录的每个文件，并原子写入 `.harness/outputs/<session-id>/`；`manifest.json` 保存路径、大小与 SHA-256，后台回收不会删除导出副本。
 
-保存接口为 `POST /api/agent/sessions/:sessionId/save`。它只接受已签发 session 的直接子文件，并拒绝路径穿越、绝对路径、符号链接和非普通文件。`public` 模式不提供持久化，调用会返回 `403 PERSISTENCE_DISABLED`。
+保存接口为 `POST /api/agent/sessions/:sessionId/save`，请求体为空对象。它导出完整会话清单，并拒绝路径穿越、符号链接、摘要不匹配及覆盖既有导出。`public` 模式不提供持久化。
 
-当前 WebUI 已提供 Provider 配置管理；Provider adapter factory 目前是安全的本地 seam，尚未接入完整 run-route 的 Provider 选择流程。真实 LLM 与完整工具仍以本地可信模式为边界。
+线上 WebUI 使用 `npm run build:static-demo` 生成纯静态机制演示，可托管于 GitHub Pages，无需部署服务器或配置秘密。真实 LLM、系统凭据库与完整工具只在 loopback 本地版启用。

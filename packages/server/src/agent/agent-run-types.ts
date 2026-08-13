@@ -3,14 +3,15 @@ import type { Session } from '../../../core/src/types.js';
 import type { RuntimeExperience } from '../security/runtime-policy.js';
 import type { PublicSession } from '../session/session-registry.js';
 import type { SSEEvent } from '../sse/sse-manager.js';
+import type { ArtifactTracker } from '../session/artifact-tracker.js';
 
 export interface AgentRunInput {
   readonly session: PublicSession;
   readonly task: string;
   readonly mode: RuntimeExperience;
-  readonly providerId?: string;
   readonly apiKey?: string;
   readonly emit: (type: SSEEvent['type'], data: unknown) => void;
+  readonly artifactTracker?: ArtifactTracker;
 }
 
 export interface AgentRunOutput {
