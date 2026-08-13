@@ -1,147 +1,106 @@
-# Coding Agent Harness：最终交付加固计划与状态
+# Coding Agent Harness：实现计划、演进与最终交付状态
 
-> 基线：`origin/master` at `0fb39b8`。加固分支：`codex/final-delivery`。日期：2026-08-12。
+> 当前状态日期：2026-08-13。本文区分“2026-07-25 原始实现计划”“后续加固任务”和“尚未完成的外部交付门槛”。历史方案不再作为当前产品承诺。
 
-> 2026-08-13 更新：旧状态表保留为历史证据。当前实现已在 `993ee8f` 恢复全仓类型/测试/构建基线，并在 `e6796a3` 完成 OS 凭据库、清单导出和静态演示；随后补充单次审批绑定的项目应用流程与 GitHub Pages 工作流。CLI 自动 clean-install/start/WebUI/cleanup 现为 4/4 通过，旧“部分闭合”结论不再代表当前状态。
+## 1. 计划证据索引
 
-## 当前权威状态（2026-08-13）
+- 原始 `writing-plans` 输出：[`docs/superpowers/plans/2026-07-25-original-implementation-plan.md`](docs/superpowers/plans/2026-07-25-original-implementation-plan.md)。该快照包含 9 个 Phase、62 个 task，以及每个 task 的目标、文件路径和验证步骤。
+- 设计和计划演进：`docs/superpowers/specs/`、`docs/superpowers/plans/`。
+- 逐日执行证据：`AGENT_LOG.md`。
+- brainstorming、冷启动和方案取舍：`SPEC_PROCESS.md`。
+- 当前产品契约：`SPEC.md`。若历史计划与当前契约冲突，以 `SPEC.md` 为准。
 
-下表取代后文 2026-08-12 的历史状态表；后文仅用于保存当时的 TDD/评审过程证据。
+原始 62-task 计划没有在实现过程中逐项持续写回 commit hash；这是课程流程偏差，不能通过事后文档改写为已遵循。Git 历史、`AGENT_LOG.md` 和下方加固任务表共同提供可核验映射。
 
-| Task | 当前结果 | 关键提交 | 验证 | 状态 |
+## 2. 原始 62-task 阶段映射
+
+| Phase | Tasks | 目标 | 主要实现提交/阶段证据 | 当前结论 |
 | --- | --- | --- | --- | --- |
-| 1–3 | Governance/HITL、项目记忆隔离、反馈因果性 | 历史提交见下文 | Core 297/297 | 已闭合 |
-| 4 | npm tarball 与 CLI clean install/start/WebUI/cleanup | `993ee8f` | CLI 4/4 | 已闭合 |
-| 5 | OS 凭据库、内存临时 Key、状态/更新/清除/认证分类 | `e6796a3`, `badd838` | Server credential/route tests | 已闭合 |
-| 6 | 会话产物追踪、manifest 原子导出、到期前保留 | `e6796a3`, `dc7d52e` | Server 197/197 | 已闭合 |
-| 7 | 项目变更预览、摘要绑定、单次批准 | `921ba04` | project-change tests 3/3 | 已闭合 |
-| 8 | 无服务器静态 WebUI、Pages CI、依赖边界 | `921ba04` | static build/boundary pass | 已闭合 |
-| 9 | AI4SE 文档、分发和最终验证 | `192294e` + 本次文档提交 | docs/typecheck/build/package pass | 已闭合（反思由学生修改） |
+| 1 | 1–5 | Monorepo、类型、测试、CI | `188482d` 后续实现提交；完整时间线见 `AGENT_LOG.md` | 完成 |
+| 2 | 6–9 | LLM 抽象、Mock、DeepSeek、响应解析 | 7 月 25 日 Phase 1–2 提交组 | 完成 |
+| 3 | 10–17 | 文件、Shell、测试、搜索和 Git 工具 | 7 月 25 日 Phase 3 提交组 | 完成 |
+| 4 | 18–22 | Guardrail 与 HITL | 初始实现；加固 `8a5662c`–`6d33edf` | 完成并加固 |
+| 5 | 23–32 | 反馈闭环与确定性演示 | 初始实现；加固 `c48746d`、`750d787` | 完成并加固 |
+| 6 | 33–37 | 记忆、上下文、配置、停止条件 | 初始实现；加固 `7873131`、`2469f5b`、`a62658b` | 完成并加固 |
+| 7 | 38–43 | AgentLoop、Session、Core 集成 | 7 月 25 日 Phase 7 提交组 | 完成 |
+| 8 | 44–53 | Express、SSE、React WebUI | 7 月 25 日 Phase 8；后续安全与 UI 修复 | 完成 |
+| 9 | 54–62 | CLI、部署、凭据、文档、冷启动、CI、分发 | 多次方案演进；见下方 Task 4–9 | 部分完成；冷启动晚于规定时点 |
 
-依赖关系：1–3 为 Harness 内核；4–5 为本地运行前提；6 依赖会话/工具；7 依赖 6；8 可独立构建但发布依赖 CI；9 依赖全部工程任务。可并行部分为 Core 机制、凭据适配、静态演示；导出与项目应用必须串行。
+原始计划中的早期托管、凭据文件、运行时与数据库驱动选择均已废弃，详情只在带历史警示的原始快照中保留。当前方案是 Node.js 22、`sql.js`、OS keyring、本地 loopback 完整版和线上无服务器静态演示。
 
-## 状态定义
+## 3. 最终加固任务
 
-- **已闭合**：要求的实现、测试证据、审查修复与提交均存在。
-- **部分闭合**：产品修复存在，但指定的端到端自动化证据仍有明确间隙。
-- **本轮执行**：正在按本计划处理，不推导整个仓库或 release 的完成状态。
+状态定义：
 
-以下 2026-08-12 表格和段落为历史快照，不是当前验收结论。
+- **完成**：实现、确定性测试和本地验证均存在。
+- **部分完成**：代码已实现，但指定环境或外部交付证据尚未闭合。
+- **待外部操作**：需要 GitHub 设置、Release 发布或学生本人完成，不能由本地测试替代。
 
-## 加固任务总表
+| Task | 目标与准确文件 | RED/验收测试 | 依赖 | 关键提交 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 危险工具风险进入 Governance/HITL；`packages/core/src/tools/tool.ts`、`guardrail/*`、`loop/agent-loop.ts` | `packages/core/test/guardrail/*.test.ts`、`loop/agent-loop.test.ts` | 原始 Tasks 10–20、38 | `8a5662c`, `4fbf033`, `5398188`, `bb426ea`, `6d33edf` | 完成 |
+| 2 | MemoryStore 按项目隔离并注入 AgentLoop；`packages/core/src/memory/*`、`loop/context-builder.ts`、Server 生产装配 | `packages/core/test/memory/memory-store.test.ts`、`loop/context-builder.test.ts`、Server agent tests | Task 1；原始 Tasks 33–38 | `7873131`, `2469f5b`, `a62658b` | 完成 |
+| 3 | 证明失败反馈改变下一轮 Mock 行动；`packages/core/src/feedback/*`、`llm/mock.ts`、demo | `packages/core/test/demo/feedback-demo.test.ts`、`loop/agent-loop.test.ts`、Server demo tests | Tasks 1–2 | `c48746d`, `750d787` | 完成 |
+| 4 | npm tarball 与安装后 CLI 启动；三个 `package.json`、`packages/cli/src/cli.ts`、Server build | `packages/cli/test/installed-runtime.test.mjs`、`scripts/verify-packages.mjs` | Core/Server build | `1666103`, `993ee8f`；本轮 Windows 清理修复 | 完成：Windows 4/4，health/配置/WebUI/端口回收通过 |
+| 5 | OS keyring、memory-only Key、配置状态和认证分类；`credential-keyring.ts`、`credential-store.ts`、`routes/config.ts`、`routes/test-key.ts`、`ConfigPage.tsx` | credential/config/test-key tests；401/402/429/5xx/连接失败分类 | Task 4、本地模式 | `e6796a3`, `badd838` | 完成 |
+| 6 | 会话产物追踪、SHA-256 manifest、原子导出；`session/artifact-tracker.ts`、`artifact-exporter.ts`、`workspace-manager.ts` | artifact/workspace tests，拒绝穿越、链接、摘要变化和覆盖 | Server session、Task 1 | `e6796a3`, `dc7d52e` | 完成 |
+| 7 | 项目变更预览、摘要绑定和单次批准；`session/project-change-applier.ts`、agent routes/UI | `project-change-applier.test.ts` 与 route/UI tests | Task 6 | `921ba04` | 完成 |
+| 8 | 无 Key 静态机制演示和 Pages workflow；static Vite entry、`.github/workflows/ci.yml` | static build、`verify-static-boundary`、public demo tests | Task 3；发布依赖 unit-test | `921ba04` 及后续 Pages 修正 | Pages 已启用；待本轮推送触发远端部署并取得成功记录 |
+| 9 | AI4SE 文档、最终验证和分发；根目录交付文档、CI、package verifier | `test:docs`、`check:docs`、typecheck、test、build、package、audit | Tasks 1–8 | `874f29f`, `192294e`, `487e5ed` | 部分完成：Reflection 正文字数已确认合规；Release/README 真实附件地址待发布 |
 
-| Task | 目标 | 提交 | 证据摘要 | 状态 |
-| --- | --- | --- | --- | --- |
-| 1 | 危险工具风险进入 Governance/HITL | `8a5662c`, `4fbf033`, `5398188`, `bb426ea`, `6d33edf` | Core 292/292 与 build 通过；4 轮审查修复后无重要阻断 | 已闭合 |
-| 2 | MemoryStore 项目隔离并注入 AgentLoop | `7873131`, `2469f5b`, `a62658b` | Core 295/295、memory 9/9、Server 集成与 build 通过 | 已闭合 |
-| 3 | 证明反馈导致下一步 mock 行动改变 | `c48746d`, `750d787` | Core demo 6/6、Server demo 17/17、两个 build 通过 | 已闭合 |
-| 4 | 修复安装包 metadata、Server 入口和 CLI 解析 | `1666103` | Core 297、Server 184、包 build 与 stale-chunk 1/1；人工 clean-install 成功；自动 Windows 清理证据有间隙 | 部分闭合 |
-| 5 | 隔离本地凭据文件并验证完整生命周期 | `61bed5f` | focused lifecycle 1/1、Server 185/185、Server build 通过 | 已闭合 |
-| 6 | 对齐五份交付文档并增加一致性扫描 | `874f29f` | scanner 10/10、五份文档扫描通过 | 已闭合 |
-| 7 | CI 构建与 package entry 可复现验证 | `714b078` | CI contract 2/2、package verifier 3/3、build 通过；root test 超过 240 秒后终止 | 已闭合 |
-| 8 | 最终验证、学生反思清单与发布边界 | 本提交（验证基线 `714b078`） | Core 297、Server 185、build、demo/mechanism、凭据与 package 检查通过；完整 CLI suite 无输出超过 240 秒并终止，自动 Windows install/start/WebUI/cleanup 仍未验证 | 部分闭合 |
+## 4. 依赖与可并行关系
 
-## Task 1：危险工具治理
+```text
+Tasks 1–3 Harness 内核
+        ├── Task 5 本地凭据与 API
+        ├── Task 6 产物追踪/导出 ── Task 7 项目应用
+        └── Task 8 静态机制演示
 
-### 验收范围
+Task 4 npm/CLI 分发依赖 Core + Server build
+Task 9 最终交付依赖 Tasks 1–8 和外部 Pages/Release 状态
+```
 
-- ToolRegistry 使用注册工具的 `riskLevel`，而不是只检查命令文本。
-- `dangerous` 工具即使执行无害文本，也会进入 HITL。
-- 批准绑定不可变的 tool call 名称、ID 与规范化参数，只消费一次。
-- AgentLoop abort 后不能留下可复用批准或继续执行。
+Tasks 1–3 的内部修复存在共享 Core 状态，按顺序完成；Task 5、Task 6 和 Task 8 可在独立 worktree 并行；Task 7 必须在 Task 6 后串行；Task 9 最后执行。
 
-### 实际过程
+## 5. 当前验证证据
 
-初始提交 `8a5662c` 建立风险感知路径。独立审查连续发现 Registry 绕过、宽松批准布尔值、批准复用和 callback abort 竞态，分别由后续四个提交收紧。最终报告记录 Core 292/292 和 build 通过；可选的深层参数 mutation 用例未纳入本任务。
+2026-08-13 最近一次本地审查：
 
-## Task 2：项目记忆隔离
+- workspace typecheck：通过。
+- Core：297/297。
+- Server：197/197。
+- 文档一致性：10/10。
+- npm package entry、完整 build、静态 build/boundary：通过。
+- API/凭据专项：10/10。
+- 产物/工作区专项：47/47。
+- public 安全演示专项：75/75。
+- 生产依赖 audit：0 个已知漏洞。
+- 实际本地 Server：health 200、WebUI 200；本机 OS keyring 状态为可用但未保存 Key。
+- CLI Windows 自动生命周期：修复测试 fixture 精确 PID 清理后，当前 4/4 通过；packed CLI 验证 health、配置状态、WebUI 与端口回收。
 
-### 验收范围
+## 6. 尚未闭合的最终门槛
 
-- MemoryStore 的搜索、写入和删除都需要项目身份。
-- SQL 查询以 `project_path` 参数化过滤。
-- AgentLoop 只把当前 `workingDir` 的受限结果交给 ContextBuilder。
-- Server 生产调用路径注入真实 MemoryStore。
+1. 推送本轮提交并确认 GitHub Actions 中 `unit-test` 与 `deploy-static-demo` 均为成功状态。
+2. 创建真实 GitHub Release，上传 Core/Server/CLI 三个 tarball及校验文件，并把真实获取地址写入 README。
+3. 最终执行：
 
-### 实际过程
+```powershell
+npm.cmd run typecheck
+npm.cmd test
+npm.cmd run build
+npm.cmd run verify:packages
+npm.cmd run build:static-demo
+npm.cmd run verify:static-boundary
+npm.cmd run check:docs
+npm.cmd audit --omit=dev
+```
 
-`7873131` 引入项目隔离与 AgentLoop 记忆；审查发现 Server 生产调用者缺少依赖和删除边界不完整，由 `2469f5b` 与 `a62658b` 修复。任务报告同时记录 Server `tsc --noEmit` 存在与本任务无关的旧错误；这不被改写成全仓类型检查成功。
+## 7. 如实记录的流程偏差
 
-## Task 3：反馈因果性
+- 陌生智能体冷启动在实现后补做，而课程要求在实现前完成。
+- 初期开发主要在线性工作区进行，没有做到每个独立功能一个 worktree/PR；后期加固才规范使用。
+- 原始 62-task PLAN 没有逐 task 持续写回 commit hash。
+- 部分早期提交/PR 没有标注 subagent 与人工修改。
+- 旧凭据文件和托管方案经过实现/评审后被废弃；其文档只作为过程证据保留。
 
-### 验收范围
-
-- MockLLMAdapter 能记录请求，并依据下一轮请求中可观察的反馈选择响应。
-- selector 不读取私有 `feedbackState` 捷径。
-- 第一次已知失败、结构化修复建议、不同的第二动作和第二次通过都有断言。
-- public demo 的结构化 allowlist 不被破坏。
-
-### 实际过程
-
-`c48746d` 建立 selector 与反馈演示；审查要求第二轮动作必须依赖消息中真实反馈，`750d787` 加强该断言。最终 demo 测试计数为 Core 6/6、Server 17/17。
-
-## Task 4：安装包与 CLI
-
-### 验收范围
-
-- Server package 导出稳定入口并包含 client 资产。
-- CLI 通过 package metadata 解析 Server，不使用 monorepo 相对 fallback。
-- Server build 清理旧 chunk，tarball manifest 不含 stale chunk。
-- 安装后的命令默认监听 `127.0.0.1`。
-
-### 实际过程与证据边界
-
-`1666103` 包含产品修复和 package-manifest regression。自动 clean-install 测试在受限运行的安装阶段超时，任务报告没有宣称成功。
-
-之后用户提供人工干净安装证据：安装新增 90 个包；CLI/Server/Client 入口存在；`/api/health` 返回 200 且 mode 为 local；`/` 返回 200；停止后无监听。该结果只证明一次人工路径成功，不能替代自动 Windows cleanup 测试。因此 Task 4 标记为**部分闭合**。
-
-## Task 5：凭据生命周期隔离
-
-### 验收范围
-
-- `HARNESS_CREDENTIALS_FILE` 仅作为本地测试路径覆盖；空白或缺失时保持默认文件。
-- 测试使用 fake sentinel、临时 home/workspace/session/memory/credential 位置和真实 loopback HTTP。
-- 覆盖 initialize、status、update、lock、unlock、clear，且响应和加密文件不含明文。
-- 子进程在 `finally` 停止，sandbox 在测试后清理。
-
-### 实际过程
-
-`61bed5f` 添加环境 seam 和集成测试。报告保存了生产修改前的行为 RED、最小修改后的独立 GREEN、测试 launcher refactor 后 GREEN、Server 185/185 与 build 结果。端口预留存在轻微 TOCTOU 风险，空白包围的相对路径缺少直接集成覆盖；两者作为非阻断关注项保留。
-
-## Task 6：文档契约
-
-### 验收范围
-
-- scanner 只读取五份目标文档，使用 Node built-ins，对受控 stale/clean 文档断言退出码与诊断。
-- README 清楚区分本地完整交付与公开确定性演示，写明 CLI/WebUI、release tarball 获取、凭据、Windows 限制和 Task 4 证据边界。
-- SPEC 使用 `sql.js`，定义模块 I/O/边界/错误，并记录 `HARNESS_CREDENTIALS_FILE` 的测试覆盖性质。
-- PLAN 保持一张无冲突状态表，使用真实 Task 1–5 commits 和结果。
-- SPEC_PROCESS 只记录可从 briefs、reports 和 Git 历史确认的过程，不重演无法核验的历史。
-- AGENT_LOG 记录 Task 1–5 的任务、技能/上下文、执行角色证据、提交、人工干预与教训。
-- `REFLECTION.md` 不修改。
-
-## Task 9：本地文件保留与配置体验（已完成）
-
-- `1c06232`：Provider 配置页默认折叠高级字段，并在锁定凭据时隐藏详情。
-- `c1077a3`：增加 `temporary`/`preserve` workspace 生命周期和安全导出到 `.harness/outputs/`。
-- `deec9b3`：证明 public 模式拒绝持久化并返回 `PERSISTENCE_DISABLED`。
-- Provider adapter factory (`9076606`) 仍是安全 seam，尚未接入完整 run-route Provider 选择。
-
-## 最终门槛
-
-1. `npm.cmd run test:docs`
-2. `npm.cmd run check:docs`
-3. 对五份文档逐段人工检查运行模式、凭据、分发、Task 4 与 Task 1–5 commits。
-4. 运行与文档/脚本风险相称的现有测试或 build；若工作区中有他人修改，不能把结果归因给本提交。
-5. 暂存时只选择五份文档、scanner、scanner 测试和根 package script。
-6. `git diff --staged --check`，审查秘密词命中上下文，并确认 `REFLECTION.md` 无差异。
-7. 原子提交信息：`docs: align final local delivery contract`。
-
-## 历史关注项（现状见文首权威状态）
-
-- Task 4 的自动 Windows clean-install/cleanup 间隙已由当前 CLI 4/4 测试闭合。
-- Task 5 测试的端口预留竞态和路径空白直接覆盖可后续加强。
-- 旧 Server typecheck 错误已由当前全 workspace typecheck 闭合。
-- `REFLECTION.md` 只读复核发现 2,696 个汉字，超过 2,500 上限，且含未核验部署/历史数字和文字问题；只有学生本人可按忽略目录中的 checklist 修改正文。
-- `submission.jsonc` 保持只读；其 `is_deployed: true` 和公网地址未在本轮访问或核验，也未改成 Release URL。
-- Release 附件的最终 URL、tag 和文件名只有实际发布后才能记录；本计划不执行发布、推送或外部操作。
+这些偏差不能追溯修复为“完全遵循”，但已在 `SPEC_PROCESS.md`、`AGENT_LOG.md` 和 `REFLECTION.md` 中说明。

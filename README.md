@@ -69,7 +69,20 @@ $env:HOST = "127.0.0.1"
 npm.cmd start --workspace @harness/cli
 ```
 
-安装 release tarball 后，包提供 `harness` 命令。当前仓库没有记录最终 tarball 下载 URL；获取时应进入该仓库的 GitHub Releases 页面，选择明确标注的 release，并下载其附件中的 CLI、Server 和 Core tarball。不要根据包名猜测 URL，也不要把 `npm install -g @harness/cli` 当作已经发布的保证。
+当前 `0.1.0` 构建会生成 `harness-core-0.1.0.tgz`、`harness-server-0.1.0.tgz` 和 `harness-cli-0.1.0.tgz`。正式发布后，从该仓库的 GitHub Releases 页面进入明确标注的 release，下载同一版本的三个附件；不要根据包名猜测附件 URL，也不要把 `npm install -g @harness/cli` 当作已经发布的保证。
+
+把三个附件放入同一空目录后，可进行本地安装：
+
+```powershell
+npm.cmd init --yes
+npm.cmd install .\harness-core-0.1.0.tgz .\harness-server-0.1.0.tgz .\harness-cli-0.1.0.tgz
+$env:HARNESS_MODE = "local"
+$env:HOST = "127.0.0.1"
+$env:NODE_ENV = "production"
+.\node_modules\.bin\harness.cmd
+```
+
+macOS/Linux 使用 `npm`，最后一行改为 `./node_modules/.bin/harness`。该安装命令已在临时空目录验证：npm 安装 92 个包，三个包入口与 `harness` bin 均存在。当前仓库尚未创建正式 Release，因此暂不记录下载链接；发布后必须把真实 release/tag/附件地址补到本节。
 
 ## 确定性公开演示
 
@@ -123,6 +136,24 @@ scripts/
 
 记忆数据库由 `sql.js` 提供 SQLite 语义，按项目路径隔离。服务器的本地工作区和 session 由服务端创建，客户端不能提交任意 `workingDir`。
 
+## 第三方依赖与许可证
+
+下表来自当前安装依赖的 `package.json` 许可证元数据。`@harness/core`、`@harness/server` 和 `@harness/cli` 是本仓库内部包，不计为第三方实现；项目没有使用现成 Agent 编排框架替代自研 AgentLoop。
+
+| 依赖 | 用途 | 许可证 |
+| --- | --- | --- |
+| `express`、`cors`、`express-rate-limit` | 本地 HTTP API、跨域策略与限流 | MIT |
+| `react`、`react-dom` | 本地 WebUI 与静态演示界面 | MIT |
+| `sql.js` | SQLite 语义的项目记忆存储 | MIT |
+| `@napi-rs/keyring` | Windows/macOS/Linux 操作系统凭据库适配 | MIT |
+| `uuid` | 会话及记录标识 | MIT |
+| `yaml` | 声明式配置解析 | ISC |
+| `open` | CLI 启动后打开本地浏览器 | MIT |
+| `vite`、`vitest`、`tsup`、`tsx` | 构建、测试和开发工具 | MIT |
+| `typescript` | 类型检查与编译工具链 | Apache-2.0 |
+
+精确版本由 `package-lock.json` 锁定；传递依赖及其随包许可证文件以 npm 安装结果为准。DeepSeek 是通过 HTTPS 调用的外部 API 服务，不是复制进仓库的第三方 Agent 框架或源码。
+
 ## 验证命令
 
 ```powershell
@@ -139,7 +170,7 @@ npm.cmd run build
 - PowerShell 执行策略可能阻止 `npm.ps1`；使用 `npm.cmd`。
 - 部分 Agent Shell 命令仍假设类 Unix 命令和路径；需要这些命令时优先使用 Git Bash 或 WSL，并先审查命令。
 - CLI 的自动打开浏览器依赖桌面环境；无图形界面时可手动访问回环地址。
-- CLI 自动化测试会构建并打包三个 workspace，在临时目录安装 tarball，启动 loopback 服务，验证 health 与 WebUI，终止进程并确认端口关闭。当前结果为 4/4 通过。
+- CLI 自动化测试会构建并打包三个 workspace，在临时目录安装 tarball，启动 loopback 服务，验证 health 与 WebUI，终止进程并确认端口关闭。2026-08-13 在 Windows 上修复 detached fixture 的精确 PID 清理后，完整 suite 4/4 通过；packed CLI 的 health、配置状态、WebUI 与端口回收均已验证。
 
 ## 安全说明
 
