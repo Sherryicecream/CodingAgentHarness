@@ -207,7 +207,6 @@ test('packed CLI node entry serves health JSON and the packaged Web UI', { timeo
   const npmEnvironment = {
     ...process.env,
     npm_config_audit: 'false',
-    npm_config_cache: join(packedDirectory, '.npm-cache'),
     npm_config_prefer_offline: 'true',
   };
   let child;
