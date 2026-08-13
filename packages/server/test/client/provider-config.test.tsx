@@ -5,6 +5,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ConfigPage } from '../../client/src/components/ConfigPage.js';
+import { ProviderConfiguration } from '../../client/src/components/ProviderConfiguration.js';
 
 const jsonResponse = (body: unknown, status = 200): Response => new Response(
   JSON.stringify(body),
@@ -14,6 +15,27 @@ const jsonResponse = (body: unknown, status = 200): Response => new Response(
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+
+it.each([
+  ['an HTTP error', () => Promise.resolve(jsonResponse({ error: 'SERVICE_UNAVAILABLE' }, 503))],
+  ['a network error', () => Promise.reject(new TypeError('Failed to fetch'))],
+])('shows a provider loading error instead of an empty list after %s', async (_name, failedFetch) => {
+  vi.stubGlobal('fetch', vi.fn(failedFetch));
+
+  render(
+    <ProviderConfiguration
+      needsMasterPassword={false}
+      masterPassword=""
+      onMasterPasswordChange={vi.fn()}
+      onCredentialChange={vi.fn(async () => undefined)}
+      onMessage={vi.fn()}
+    />,
+  );
+
+  const alert = await screen.findByRole('alert');
+  expect(alert.textContent).toContain('Unable to load providers');
+  expect(screen.queryByText('No additional providers configured.')).toBeNull();
 });
 
 it('adds, lists, and deletes a provider without retaining its key in the form', async () => {

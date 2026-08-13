@@ -16,9 +16,11 @@ interface ProviderConfigurationProps {
   onMessage(message: { type: 'success' | 'error' | 'info'; text: string }): void;
 }
 
+type ProviderLoadState = 'loading' | 'loaded' | 'error';
+
 const fetchProviders = async (): Promise<ProviderSummary[]> => {
   const response = await fetch('/api/config/providers');
-  if (!response.ok) return [];
+  if (!response.ok) throw new Error('Unable to load providers');
   const body = await response.json() as { providers?: unknown };
   return Array.isArray(body.providers) ? body.providers as ProviderSummary[] : [];
 };
@@ -31,6 +33,7 @@ export function ProviderConfiguration({
   onMessage,
 }: ProviderConfigurationProps) {
   const [providers, setProviders] = useState<ProviderSummary[]>([]);
+  const [providerLoadState, setProviderLoadState] = useState<ProviderLoadState>('loading');
   const [id, setId] = useState('');
   const [name, setName] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
@@ -38,12 +41,21 @@ export function ProviderConfiguration({
   const [apiKey, setApiKey] = useState('');
 
   useEffect(() => {
-    void fetchProviders().then(setProviders);
+    void fetchProviders().then((nextProviders) => {
+      setProviders(nextProviders);
+      setProviderLoadState('loaded');
+    }).catch(() => setProviderLoadState('error'));
     return () => setApiKey('');
   }, []);
 
   const refresh = async () => {
-    setProviders(await fetchProviders());
+    setProviderLoadState('loading');
+    try {
+      setProviders(await fetchProviders());
+      setProviderLoadState('loaded');
+    } catch {
+      setProviderLoadState('error');
+    }
     await onCredentialChange();
   };
 
@@ -100,22 +112,31 @@ export function ProviderConfiguration({
     await refresh();
   };
 
+  let providerList: React.ReactNode;
+  if (providerLoadState === 'loading') {
+    providerList = <div className="loading-text">Loading providers...</div>;
+  } else if (providerLoadState === 'error') {
+    providerList = <div role="alert">Unable to load providers.</div>;
+  } else if (providers.length === 0) {
+    providerList = <div>No additional providers configured.</div>;
+  } else {
+    providerList = providers.map((provider) => (
+      <div key={provider.id} style={{ marginBottom: 12 }}>
+        <strong>{provider.name}</strong>
+        <div>{provider.baseUrl} · {provider.model}</div>
+        <button
+          className="btn btn-danger"
+          aria-label={`Delete ${provider.name}`}
+          onClick={() => void remove(provider)}
+        >Delete</button>
+      </div>
+    ));
+  }
+
   return (
     <div className="card" style={{ marginTop: 16 }}>
       <h3>Providers</h3>
-      {providers.length === 0
-        ? <div>No additional providers configured.</div>
-        : providers.map((provider) => (
-          <div key={provider.id} style={{ marginBottom: 12 }}>
-            <strong>{provider.name}</strong>
-            <div>{provider.baseUrl} · {provider.model}</div>
-            <button
-              className="btn btn-danger"
-              aria-label={`Delete ${provider.name}`}
-              onClick={() => void remove(provider)}
-            >Delete</button>
-          </div>
-        ))}
+      {providerList}
       <label htmlFor="provider-id">Provider ID</label>
       <input id="provider-id" className="input" value={id} onChange={(event) => setId(event.target.value)} autoComplete="off" />
       <label htmlFor="provider-name">Provider name</label>
