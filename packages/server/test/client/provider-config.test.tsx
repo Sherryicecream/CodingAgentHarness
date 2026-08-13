@@ -66,7 +66,7 @@ it('submits the API key with the first master password', async () => {
   render(<ConfigPage mode="local" />);
   await screen.findByLabelText('DeepSeek API Key（不会回显）');
   await userEvent.type(screen.getByLabelText('DeepSeek API Key（不会回显）'), 'sk-test-value');
-  await userEvent.type(screen.getByLabelText(/首次设置主密码/), 'correct horse battery staple');
+  await userEvent.type(screen.getByLabelText(/设置主密码/), 'correct horse battery staple');
   await userEvent.type(screen.getByLabelText(/确认主密码/), 'correct horse battery staple');
   await userEvent.click(screen.getByRole('button', { name: '保存 DeepSeek API Key' }));
   expect(fetchSpy).toHaveBeenCalledWith('/api/config/key', expect.objectContaining({ method: 'POST' }));
@@ -82,7 +82,7 @@ it('requires matching confirmation before saving a new master password', async (
   render(<ConfigPage mode="local" />);
   await screen.findByLabelText(/DeepSeek API Key/);
   await userEvent.type(screen.getByLabelText(/DeepSeek API Key/), 'sk-test-value');
-  await userEvent.type(screen.getByLabelText(/首次设置主密码/), 'correct horse battery staple');
+  await userEvent.type(screen.getByLabelText(/设置主密码/), 'correct horse battery staple');
   const confirmation = screen.getByLabelText(/确认主密码/);
   await userEvent.type(confirmation, 'different password');
   await userEvent.click(screen.getByRole('button', { name: '保存 DeepSeek API Key' }));
