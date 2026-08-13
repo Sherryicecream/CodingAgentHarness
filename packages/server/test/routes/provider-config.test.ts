@@ -42,6 +42,24 @@ afterEach(async () => {
 });
 
 describe('local provider configuration', () => {
+  it('rejects non-DeepSeek provider ids and endpoints', async () => {
+    const { app } = makeLocalApp();
+    await request(app).post('/api/config/key').send({
+      key: DEEPSEEK_SENTINEL,
+      masterPassword: MASTER_PASSWORD,
+    }).expect(200);
+
+    const response = await request(app).post('/api/config/providers').send({
+      id: 'openai',
+      name: 'Other provider',
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-test',
+      apiKey: PROVIDER_KEY_SENTINEL,
+    });
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: 'INVALID_PROVIDER' });
+  });
+
   it('adds, lists, and deletes a second encrypted provider without returning either key', async () => {
     const { app, filePath } = makeLocalApp();
     await request(app).post('/api/config/key').send({
@@ -50,10 +68,10 @@ describe('local provider configuration', () => {
     }).expect(200);
 
     const created = await request(app).post('/api/config/providers').send({
-      id: 'fake-compatible',
-      name: 'Fake Compatible Provider',
-      baseUrl: 'https://provider.invalid/v1',
-      model: 'fake-model-v1',
+      id: 'deepseek',
+      name: 'DeepSeek',
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-chat',
       apiKey: PROVIDER_KEY_SENTINEL,
     });
     const listed = await request(app).get('/api/config/providers');
@@ -61,10 +79,10 @@ describe('local provider configuration', () => {
     expect(created.status).toBe(201);
     expect(created.body).toEqual({
       provider: {
-        id: 'fake-compatible',
-        name: 'Fake Compatible Provider',
-        baseUrl: 'https://provider.invalid/v1',
-        model: 'fake-model-v1',
+        id: 'deepseek',
+        name: 'DeepSeek',
+        baseUrl: 'https://api.deepseek.com',
+        model: 'deepseek-chat',
         hasApiKey: true,
       },
     });
@@ -74,7 +92,7 @@ describe('local provider configuration', () => {
     expect(readFileSync(filePath, 'utf8')).not.toContain(DEEPSEEK_SENTINEL);
     expect(readFileSync(filePath, 'utf8')).not.toContain(PROVIDER_KEY_SENTINEL);
 
-    await request(app).delete('/api/config/providers/fake-compatible').expect(200);
+    await request(app).delete('/api/config/providers/deepseek').expect(200);
     await request(app).get('/api/config/providers').expect(200, { providers: [] });
     await request(app).get('/api/config/status').expect(200, {
       hasKey: true,
