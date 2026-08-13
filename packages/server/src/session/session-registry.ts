@@ -5,11 +5,13 @@ export const DEFAULT_SESSION_TTL_MS = 60 * 60 * 1_000;
 export const DEFAULT_MAX_CONCURRENT_SESSIONS = 2;
 
 export type SessionStatus = 'issued' | 'running' | 'completed' | 'failed' | 'expired';
+export type WorkspaceRetention = 'temporary';
 
 export interface PublicSession {
   readonly id: string;
   readonly clientKey: string;
   readonly workspace: string;
+  readonly retention: WorkspaceRetention;
   readonly status: SessionStatus;
   readonly createdAt: Date;
   readonly expiresAt: Date;
@@ -77,6 +79,7 @@ const toPublicSession = (record: SessionRecord): PublicSession => Object.freeze(
   id: record.id,
   clientKey: record.clientKey,
   workspace: record.workspace,
+  retention: 'temporary',
   status: record.status,
   createdAt: new Date(record.createdAt),
   expiresAt: new Date(record.expiresAt),
@@ -87,6 +90,12 @@ const assertPositiveInteger = (value: number, name: string): void => {
     throw new Error(`${name} must be a positive integer`);
   }
 };
+
+const isWorkspaceReclaimable = (record: SessionRecord, timestamp: number): boolean => (
+  record.status === 'completed'
+  || record.status === 'failed'
+  || timestamp >= record.expiresAt
+);
 
 export const createSessionRegistry = (
   options: SessionRegistryOptions,
@@ -183,7 +192,7 @@ export const createSessionRegistry = (
       let removed = 0;
       const failures: unknown[] = [];
       for (const [id, record] of records) {
-        if (timestamp < record.expiresAt || sweepOptions.skipIds?.has(id)) {
+        if (!isWorkspaceReclaimable(record, timestamp) || sweepOptions.skipIds?.has(id)) {
           continue;
         }
         try {

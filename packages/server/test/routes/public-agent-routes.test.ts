@@ -54,6 +54,7 @@ describe('public agent request boundaries', () => {
     expect(response.body).toMatchObject({
       sessionId: 'server-issued-session',
       mode: 'public',
+      workspaceRetention: 'temporary',
       capabilities: {
         allowedExperiences: ['demo'],
         allowByok: false,

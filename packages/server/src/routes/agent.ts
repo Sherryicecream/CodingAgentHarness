@@ -430,6 +430,7 @@ export const createAgentRouter = (
           allowHttpByok: dependencies.policy.allowHttpByok,
         },
         workspaceRoot: dependencies.workspaceRoot ?? null,
+        workspaceRetention: session.retention,
         expiresAt: session.expiresAt.toISOString(),
       });
     } catch {
