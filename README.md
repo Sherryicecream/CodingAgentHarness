@@ -40,6 +40,8 @@ npm.cmd start --workspace @harness/server
 
 然后打开 `http://127.0.0.1:3000`。这是本地可信模式；不要把它绑定到公网接口。
 
+从仓库根执行上述命令时，npm 的 `INIT_CWD` 会成为项目根，长期产物写入该目录的 `.harness/outputs/<session-id>/`。从其他目录或不经过 npm 启动时，可显式设置 `$env:HARNESS_PROJECT_ROOT = "D:\path\to\project"`。
+
 开发模式使用源码入口：
 
 ```powershell

@@ -143,7 +143,12 @@ export const createApp = (options: AppOptions = {}): HarnessApp => {
   const workspaceRoot = options.workspaceRoot
     ?? process.env.HARNESS_WORKSPACE_ROOT
     ?? join(process.cwd(), '.harness-workspaces');
-  const projectRoot = options.projectRoot ?? process.cwd();
+  const projectRoot = resolve(
+    options.projectRoot
+      ?? process.env.HARNESS_PROJECT_ROOT
+      ?? process.env.INIT_CWD
+      ?? process.cwd(),
+  );
   const credentialStore = options.credentialStore ?? disabledCredentialStore();
   const sessionStore = policy.mode === 'local'
     ? options.sessionStore!
