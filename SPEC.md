@@ -148,6 +148,7 @@ npm.cmd ci
 npm.cmd run build
 $env:HARNESS_MODE = "local"
 $env:HOST = "127.0.0.1"
+$env:NODE_ENV = "production"
 npm.cmd start --workspace @harness/server
 ```
 

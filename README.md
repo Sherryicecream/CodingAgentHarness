@@ -34,6 +34,7 @@ macOS/Linux 可将示例中的 `npm.cmd` 替换为 `npm`。
 $env:HARNESS_MODE = "local"
 $env:HOST = "127.0.0.1"
 $env:PORT = "3000"
+$env:NODE_ENV = "production"
 npm.cmd start --workspace @harness/server
 ```
 
