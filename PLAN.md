@@ -67,7 +67,7 @@ Tasks 1–3 的内部修复存在共享 Core 状态，按顺序完成；Task 5�
 2026-08-13 最近一次本地审查：
 
 - workspace typecheck：通过。
-- Core：300/300。
+- Core：301/301。
 - Server：199/199。
 - 文档一致性：10/10。
 - npm package entry、完整 build、静态 build/boundary：通过。

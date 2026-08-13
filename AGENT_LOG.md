@@ -189,7 +189,7 @@
 - **设计/计划（Git）**：`f5e8298`；生产修复分别为 `f350aa2`（Windows Shell 进程树）、`8be1a6d`（HTTP listener 就绪）和 `ddc9537`（独立审阅加固）。
 - **RED 证据**：官方校验的 Node.js 22.23.2 全新副本中，`execute_shell` 超时返回后立即删除 cwd 稳定报 `EBUSY`；`startServer()` 在监听回调前已解析，并把模拟 `EADDRINUSE` 错误误判为成功。
 - **审阅加固**：独立审阅指出 `taskkill` 非零退出被忽略、裸可执行文件搜索、同步 `listen()` 异常未清理，以及旧 Release/新源码证据混写。随后固定 `%SystemRoot%\System32\taskkill.exe`、校验 SystemRoot 与退出码，并覆盖同步/异步绑定错误的 `app.close()`。
-- **GREEN 证据**：Shell focused 7/7、Windows 清理 helper 3/3、Core 300/300；Server focused 7/7、完整 199/199；packed CLI focused 26.6 秒、完整 CLI 4/4；没有放宽测试预算或删除断言。
+- **GREEN 证据**：Shell focused 7/7、Windows 清理 helper 4/4、Core 301/301；Server focused 7/7、完整 199/199；packed CLI focused 26.6 秒、完整 CLI 4/4；没有放宽测试预算或删除断言。
 - **实际运行**：隐藏后台启动本地 Server，health 返回 `ok/local`，禁用 keyring 时配置返回 `unavailable/false`，WebUI 返回 200；停止后连续三次连接失败，证明端口释放。
 - **交付元数据**：学号 `251250277` 的 `submission.jsonc` 保存在忽略目录，与源码 ZIP 并列，不进入 Git 或压缩包。
 - **教训**：`listen()` 被调用不等于服务已就绪；杀死 Windows 命令 shell 不等于后代进程已退出。面向用户的验收必须覆盖 ready、error、timeout 和 shutdown 四个边界。
@@ -207,6 +207,6 @@
 - 完整 Harness 仅在 loopback 本地运行；线上构建为无秘密、无真实 LLM、无进程工具的静态演示。
 - 持久凭据使用 OS keyring；临时 Key 仅在内存。
 - 长期文件保存到项目 `.harness/outputs/`；`.harness-workspaces` 是隔离临时区。
-- 当前验证基线记录为 Core 32 files/300 tests、Server 23 files/199 tests、CLI lifecycle 4/4；这些数字必须与对应 commit/运行日期一起解释。
+- 当前验证基线记录为 Core 32 files/301 tests、Server 23 files/199 tests、CLI lifecycle 4/4；这些数字必须与对应 commit/运行日期一起解释。
 - `REFLECTION.md` 属于学生本人材料，本轮没有代写或修改。
 - GitHub Pages 静态演示与 `v0.1.0` Release 已公开验收；真实链接集中记录在 `AI4SE_DELIVERY_CHECKLIST.md`。

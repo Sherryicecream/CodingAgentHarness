@@ -47,7 +47,7 @@ npm.cmd run check:docs
 npm.cmd audit --omit=dev
 ```
 
-当前本地证据：官方 Node.js 22.23.2 便携运行时下 Core 300/300、Server 199/199、Windows CLI 4/4；完整 build、typecheck 和 package entry 验证通过；生产依赖审计 0 个已知漏洞。该组数字属于最终源码；`v0.1.0` 是固定在 `99d7906` 的历史附件证据。
+当前本地证据：官方 Node.js 22.23.2 便携运行时下 Core 301/301、Server 199/199、Windows CLI 4/4；完整 build、typecheck 和 package entry 验证通过；生产依赖审计 0 个已知漏洞。该组数字属于最终源码；`v0.1.0` 是固定在 `99d7906` 的历史附件证据。
 
 ## 上传后核验与剩余事项
 

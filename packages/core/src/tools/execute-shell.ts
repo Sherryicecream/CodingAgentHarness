@@ -6,13 +6,14 @@ import { win32 } from 'node:path';
 export const terminateWindowsProcessTree = async (
   pid: number,
   environment: Readonly<Record<string, string | undefined>> = process.env,
+  fileExists: (path: string) => boolean = existsSync,
 ): Promise<void> => {
   const systemRoot = environment.SystemRoot;
   if (!systemRoot || !win32.isAbsolute(systemRoot)) {
     throw new Error('Windows SystemRoot must be an absolute path');
   }
   const taskkillPath = win32.join(systemRoot, 'System32', 'taskkill.exe');
-  if (!existsSync(taskkillPath)) {
+  if (!fileExists(taskkillPath)) {
     throw new Error(`Windows taskkill executable was not found under SystemRoot: ${taskkillPath}`);
   }
 

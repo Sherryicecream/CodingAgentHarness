@@ -18,7 +18,7 @@ describe('Windows shell process-tree termination', () => {
     spawnMock.mockReturnValueOnce(child);
     const { terminateWindowsProcessTree } = await import('../../src/tools/execute-shell.js');
 
-    const termination = terminateWindowsProcessTree(321, { SystemRoot: 'C:\\Windows' });
+    const termination = terminateWindowsProcessTree(321, { SystemRoot: 'C:\\Windows' }, () => true);
     child.emit('close', 0);
     await termination;
 
@@ -34,7 +34,7 @@ describe('Windows shell process-tree termination', () => {
     spawnMock.mockReturnValueOnce(child);
     const { terminateWindowsProcessTree } = await import('../../src/tools/execute-shell.js');
 
-    const termination = terminateWindowsProcessTree(654, { SystemRoot: 'C:\\Windows' });
+    const termination = terminateWindowsProcessTree(654, { SystemRoot: 'C:\\Windows' }, () => true);
     child.emit('close', 5);
 
     await expect(termination).rejects.toThrow('taskkill exited with code 5');
@@ -46,6 +46,14 @@ describe('Windows shell process-tree termination', () => {
     await expect(terminateWindowsProcessTree(1, {})).rejects.toThrow('SystemRoot');
     await expect(terminateWindowsProcessTree(1, { SystemRoot: 'relative' }))
       .rejects.toThrow('SystemRoot');
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects when taskkill is absent from the validated SystemRoot', async () => {
+    const { terminateWindowsProcessTree } = await import('../../src/tools/execute-shell.js');
+
+    await expect(terminateWindowsProcessTree(1, { SystemRoot: 'C:\\Windows' }, () => false))
+      .rejects.toThrow('taskkill executable was not found');
     expect(spawnMock).not.toHaveBeenCalled();
   });
 });

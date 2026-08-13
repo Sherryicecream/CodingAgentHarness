@@ -178,7 +178,7 @@ npm.cmd run build
 - PowerShell 执行策略可能阻止 `npm.ps1`；使用 `npm.cmd`。
 - 部分 Agent Shell 命令仍假设类 Unix 命令和路径；需要这些命令时优先使用 Git Bash 或 WSL，并先审查命令。
 - CLI 的自动打开浏览器依赖桌面环境；无图形界面时可手动访问回环地址。
-- CLI 自动化测试会构建并打包三个 workspace，在临时目录安装 tarball，启动 loopback 服务，验证 health 与 WebUI，终止进程并确认端口关闭。2026-08-13 使用 Node.js 22.23.2 在 Windows 上完成全新路径复核：CLI 4/4、Core 300/300、Server 199/199；packed CLI 的 health、配置状态、WebUI 与端口回收均通过。该证据针对最终源码，不追溯改变 `v0.1.0` 附件。
+- CLI 自动化测试会构建并打包三个 workspace，在临时目录安装 tarball，启动 loopback 服务，验证 health 与 WebUI，终止进程并确认端口关闭。2026-08-13 使用 Node.js 22.23.2 在 Windows 上完成全新路径复核：CLI 4/4、Core 301/301、Server 199/199；packed CLI 的 health、配置状态、WebUI 与端口回收均通过。该证据针对最终源码，不追溯改变 `v0.1.0` 附件。
 - `execute_shell` 在 Windows 超时时会终止命令 shell 的整个进程树，并在清理完成后才返回；这避免后台子进程继续占用工作区或端口。清理命令只接收运行时 PID，不拼接用户命令文本。
 
 ## 安全说明
