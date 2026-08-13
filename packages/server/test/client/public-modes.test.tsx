@@ -17,6 +17,7 @@ interface SessionResponse {
     allowServerCredentials: boolean;
     allowHttpByok: boolean;
   };
+  workspaceRoot: string | null;
   expiresAt: string;
 }
 
@@ -74,6 +75,7 @@ const publicSession = (id = 'server-session-1'): SessionResponse => ({
     allowServerCredentials: false,
     allowHttpByok: false,
   },
+  workspaceRoot: null,
   expiresAt: '2030-01-01T00:00:00.000Z',
 });
 
@@ -87,6 +89,7 @@ const localSession = (id = 'local-session-1'): SessionResponse => ({
     allowServerCredentials: true,
     allowHttpByok: false,
   },
+  workspaceRoot: 'C:/project',
   expiresAt: '2030-01-01T00:00:00.000Z',
 });
 
@@ -166,9 +169,8 @@ describe('runtime-owned public and local surfaces', () => {
     expect(screen.getByText('进程工具：启用')).toBeTruthy();
 
     await userEvent.click(screen.getByRole('button', { name: '配置' }));
-    await screen.findByText('API Key 状态');
+    await screen.findByText('第 1 步：凭据状态');
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === '/api/config/status')).toBe(true);
-    expect(fetchSpy.mock.calls.some(([url]) => String(url) === '/api/config/guide')).toBe(true);
   });
 
   it('keeps the public history page without requesting a private history endpoint', async () => {
@@ -193,8 +195,7 @@ describe('runtime-owned public and local surfaces', () => {
     window.history.replaceState({}, '', '/config');
     const fetchSpy = installFetch(publicSession());
     render(<App />);
-    await screen.findByText(/配置页面仅在本地模式下可用/);
-    expect(screen.getByText('HARNESS_MODE=local')).toBeTruthy();
+    await screen.findByText('公共演示模式不会接收或保存 API Key。');
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/config/'))).toBe(false);
   });
 });
@@ -297,7 +298,7 @@ describe('server-session-first run flow', () => {
     const pendingSession = new Promise<SessionResponse>((resolve) => {
       resolveSession = resolve;
     });
-    const fetchSpy = vi.fn(async () => jsonResponse({}));
+    const fetchSpy = vi.fn(async (_input?: RequestInfo | URL) => jsonResponse({}));
     vi.stubGlobal('fetch', fetchSpy);
     const { unmount } = render(
       <ChatPanel runtimeInfo={localSession()} acquireSession={() => pendingSession} />,

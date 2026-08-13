@@ -17,6 +17,10 @@ const temporaryPaths: string[] = [];
 const apps: HarnessApp[] = [];
 
 const emptyCredentialStore: CredentialStore = {
+  getState: () => 'empty',
+  unlock: () => false,
+  lock: () => undefined,
+  initialize: () => undefined,
   hasKey: () => false,
   getKey: () => null,
   setKey: () => undefined,
@@ -337,6 +341,7 @@ describe('BYOK request security', () => {
         id: 'direct-run',
         clientKey: 'loopback',
         workspace: temporaryPaths[0] ?? process.cwd(),
+        retention: 'temporary',
         status: 'running',
         createdAt: new Date('2026-08-08T00:00:00.000Z'),
         expiresAt: new Date('2026-08-08T01:00:00.000Z'),
@@ -517,6 +522,7 @@ describe('BYOK request security', () => {
         id: 'default-wrapper',
         clientKey: 'loopback',
         workspace: process.cwd(),
+        retention: 'temporary',
         status: 'running',
         createdAt: new Date('2026-08-08T00:00:00.000Z'),
         expiresAt: new Date('2026-08-08T01:00:00.000Z'),

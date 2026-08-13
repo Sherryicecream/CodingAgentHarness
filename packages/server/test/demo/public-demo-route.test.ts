@@ -53,6 +53,7 @@ const deferWorkspaceWrite = (
       create: (sessionId) => manager.create(sessionId),
       getIssuedPath: (sessionId) => manager.getIssuedPath(sessionId),
       assertIssued: (sessionId, path) => manager.assertIssued(sessionId, path),
+      saveIssuedFile: (sessionId, filePath, projectRoot) => manager.saveIssuedFile(sessionId, filePath, projectRoot),
       async writeIssuedFile(sessionId, filePath, content, signal) {
         calls += 1;
         if (calls === deferredCall) {
@@ -88,6 +89,10 @@ describe('public demo route', () => {
     const events: SSEEvent[] = [];
     const credentialAccess = vi.fn((): never => { throw new Error('CREDENTIAL_SENTINEL_CALLED'); });
     const credentialStore: CredentialStore = {
+      getState: credentialAccess,
+      unlock: credentialAccess,
+      lock: credentialAccess,
+      initialize: credentialAccess,
       hasKey: credentialAccess,
       getKey: credentialAccess,
       setKey: credentialAccess,

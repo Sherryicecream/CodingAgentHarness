@@ -47,6 +47,7 @@ describe('privileged agent run memory integration', () => {
         id: 'memory-session',
         clientKey: 'client',
         workspace,
+        retention: 'temporary',
         status: 'running',
         createdAt: new Date(),
         expiresAt: new Date(Date.now() + 60_000),

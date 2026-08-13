@@ -108,7 +108,6 @@ export const createPrivilegedAgentRun = (
   } else {
     if (mode === 'server' && providerId) {
       const resource = (options.configuredProviderFactory ?? createConfiguredProviderAdapter)({
-        mode: options.policy.mode,
         credentialStore: options.credentialStore,
         policy: options.policy,
       }, providerId);

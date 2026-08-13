@@ -599,6 +599,7 @@ describe('createWorkspaceManager', () => {
             dev: 1n,
             ino: 1n,
             isDirectory: () => stats.isDirectory(),
+            isFile: () => stats.isFile(),
             isSymbolicLink: () => stats.isSymbolicLink(),
           };
         }
@@ -610,6 +611,7 @@ describe('createWorkspaceManager', () => {
             dev: 1n,
             ino: 2n,
             isDirectory: () => stats.isDirectory(),
+            isFile: () => stats.isFile(),
             isSymbolicLink: () => stats.isSymbolicLink(),
           };
         }
@@ -622,6 +624,7 @@ describe('createWorkspaceManager', () => {
           dev: 2n,
           ino: identity,
           isDirectory: () => stats.isDirectory(),
+          isFile: () => stats.isFile(),
           isSymbolicLink: () => stats.isSymbolicLink(),
         };
       },

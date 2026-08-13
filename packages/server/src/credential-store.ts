@@ -25,7 +25,7 @@ interface EncryptedValue {
 
 interface CredentialEnvelope {
   version: 2;
-  kdf: { name: 'scrypt'; salt: string; N: number; r: number; p: number };
+  kdf: { name: 'scrypt'; salt: string; N: 32_768; r: 8; p: 1 };
   verifier: EncryptedValue;
   entries: Record<string, EncryptedValue>;
 }

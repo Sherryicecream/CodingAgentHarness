@@ -8,6 +8,10 @@ import type { CredentialStore } from '../../src/credential-store.js';
 import { PUBLIC_RUNTIME_POLICY } from '../../src/security/runtime-policy.js';
 
 const emptyCredentialStore: CredentialStore = {
+  getState: () => 'empty',
+  unlock: () => false,
+  lock: () => undefined,
+  initialize: () => undefined,
   hasKey: () => false,
   getKey: () => null,
   setKey: () => undefined,
@@ -20,6 +24,7 @@ const input: AgentRunInput = {
     id: 'lazy-session',
     clientKey: 'client',
     workspace: 'server-owned-workspace',
+    retention: 'temporary',
     status: 'running',
     createdAt: new Date('2026-08-08T00:00:00.000Z'),
     expiresAt: new Date('2026-08-08T01:00:00.000Z'),

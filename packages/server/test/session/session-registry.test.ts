@@ -181,6 +181,7 @@ describe('createSessionRegistry', () => {
       create: (sessionId) => actualManager.create(sessionId),
       getIssuedPath: (sessionId) => actualManager.getIssuedPath(sessionId),
       assertIssued: (sessionId, path) => actualManager.assertIssued(sessionId, path),
+      saveIssuedFile: (sessionId, filePath, projectRoot) => actualManager.saveIssuedFile(sessionId, filePath, projectRoot),
       writeIssuedFile: (sessionId, filePath, content) => (
         actualManager.writeIssuedFile(sessionId, filePath, content)
       ),

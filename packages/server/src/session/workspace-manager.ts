@@ -7,6 +7,7 @@ export interface WorkspaceStats {
   readonly dev: bigint;
   readonly ino: bigint;
   isDirectory(): boolean;
+  isFile(): boolean;
   isSymbolicLink(): boolean;
 }
 

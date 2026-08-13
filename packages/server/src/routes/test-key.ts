@@ -17,7 +17,7 @@ export const handleTestKey = async (
     res.json({ valid: false, error: 'API_KEY_NOT_CONFIGURED' });
     return;
   }
-  let response: Response;
+  let response: globalThis.Response;
   try {
     response = await (dependencies.fetchImpl ?? fetch)(
     `${process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'}/v1/chat/completions`,

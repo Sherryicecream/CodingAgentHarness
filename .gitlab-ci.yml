@@ -6,6 +6,7 @@ unit-test:
   image: node:22-bookworm
   script:
     - npm ci
+    - npm run typecheck
     - npm test
     - npm run build
     - npm run verify:packages

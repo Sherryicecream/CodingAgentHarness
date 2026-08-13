@@ -4,13 +4,18 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/server.ts",
-    "build": "tsup src/server.ts --format esm --clean && vite build client --emptyOutDir",
+    "build": "tsup src/server.ts --format esm --dts --clean && vite build client --emptyOutDir",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js",
     "test": "vitest run"
   },
   "main": "./dist/server.js",
+  "types": "./dist/server.d.ts",
   "exports": {
-    ".": "./dist/server.js"
+    ".": {
+      "import": "./dist/server.js",
+      "types": "./dist/server.d.ts"
+    }
   },
   "files": [
     "dist",

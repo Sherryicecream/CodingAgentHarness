@@ -61,7 +61,6 @@ export const parseProviderInput = (value: unknown): ProviderInput | null => {
     || !PROVIDER_ID_PATTERN.test(candidate.id)
     || !isBoundedText(candidate.name, 80)
     || !isSafeBaseUrl(candidate.baseUrl)
-    || candidate.baseUrl !== 'https://api.deepseek.com'
     || !isBoundedText(candidate.model, 200)
     || !isBoundedText(candidate.apiKey, 8_192)
   ) {

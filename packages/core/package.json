@@ -5,6 +5,7 @@
   "scripts": {
     "test": "vitest run",
     "build": "tsup src/index.ts --format esm --dts --clean",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "vitest"
   },
   "main": "./dist/index.js",

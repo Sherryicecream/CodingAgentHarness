@@ -17,6 +17,10 @@ const createRoot = async (): Promise<string> => {
 };
 
 const emptyCredentials: CredentialStore = {
+  getState: () => 'empty',
+  unlock: () => false,
+  lock: () => undefined,
+  initialize: () => undefined,
   hasKey: () => false,
   getKey: () => null,
   setKey: () => undefined,
