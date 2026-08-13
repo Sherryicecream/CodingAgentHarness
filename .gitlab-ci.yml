@@ -10,3 +10,6 @@ unit-test:
     - npm test
     - npm run build
     - npm run verify:packages
+    - npm run build:static-demo
+    - npm run verify:static-boundary
+    - npm run check:docs

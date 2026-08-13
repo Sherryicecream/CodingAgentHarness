@@ -51,6 +51,10 @@ npm.cmd run dev --workspace @harness/server
 
 CLI 是本地服务器启动器；它解析已安装的 `@harness/server` 包并尝试打开浏览器。
 
+## 分发
+
+项目选择 npm 包/CLI 分发。发布前用 `npm.cmd run verify:packages` 验证 Core、Server、CLI tarball 入口；正式 Release URL 只在实际发布后补充。目标机器需要 Node.js 22，持久 Key 依赖 Windows Credential Manager、macOS Keychain 或 Linux Secret Service；Linux 无 Secret Service 时使用“仅本次使用”。
+
 从仓库构建并运行：
 
 ```powershell

@@ -131,9 +131,9 @@ Session workspace 的保留策略为：
 
 用户主动导出使用 `POST /api/agent/sessions/:sessionId/save`。服务端按会话清单核对路径、大小和 SHA-256，再原子写入 `.harness/outputs/<session-id>/` 与 `manifest.json`；路径穿越、符号链接、摘要变化和覆盖既有导出必须拒绝。
 
-### 4.2 Provider 配置边界
+### 4.2 DeepSeek 配置边界
 
-本地 Provider 配置以加密凭据存储为后端；Provider adapter factory 只允许受控的本地 allowlist 和固定 HTTPS endpoint，并在 public 模式拒绝创建。该 factory 当前是供后续执行流程使用的安全 seam，尚未接入完整 `run` route 的 Provider 选择或切换；文档不得把它描述为已完成的多 Provider 运行能力。
+产品只提供内置 DeepSeek 适配器，不暴露通用 Provider endpoint 或运行时 Provider 选择。凭据、网络目标和错误处理因此收敛到一个可审计边界。
 
 本地“仅本次使用”不写入 localStorage、sessionStorage、URL、日志、分析状态或会话。“记住在此设备”只能由本地用户通过操作系统凭据库管理。
 
@@ -171,3 +171,74 @@ CLI 运行：先构建三个包，再执行 `npm.cmd start --workspace @harness/
 - ResultParser 主要覆盖 Jest/Vitest 风格；其他测试框架需要插件。
 - Task 4 自动化 Windows 安装/清理间隙仍未核验，不能用人工结果替代。
 - 仓库没有已核验的公共完整产品端点；任何发布/托管动作都需要独立安全与运维验证。
+
+## 8. 问题、用户故事与价值
+
+目标用户是在自己的代码库中运行编码智能体、同时需要可审计工具治理和客观验证的开发者。裸 LLM 能提出动作，却不能可靠负责文件边界、危险操作审批、测试反馈、跨会话记忆或凭据治理。本项目自行实现这些 Harness 机制；线上页面只解释机制，完整产品保持单用户、本地可信运行。
+
+INVEST 用户故事：
+
+1. 开发者可用 mock LLM 离线运行主循环，从而无需网络和 Key 即可验证 Harness。
+2. Agent 只能读写签发的会话工作区，避免模型动作越过边界。
+3. 危险工具执行前暂停并等待一次性批准，批准不能被另一动作复用。
+4. 失败测试被结构化分类并回灌下一轮，使 Agent 依据客观反馈改变行动。
+5. 记忆按项目隔离并按需检索，避免其他项目污染当前上下文。
+6. 用户可临时或通过 OS 凭据库提供 Key，并可查看状态、更新和清除而不回显明文。
+7. 用户可整组导出生成文件及摘要清单，使临时工作区回收后结果仍长期存在。
+8. 用户在应用导出前可看到创建/替换预览，只批准与清单摘要绑定的一组变更。
+
+## 9. 领域与机制设计
+
+- **动作/工具**：`ToolRegistry` 提供文件、搜索、Shell、测试和 Git 工具；参数与风险级别声明在代码中，最终执行统一经过 Governance，路径固定在签发 workspace。
+- **客观反馈**：`TestRunner`、`ResultParser`、`FailureClassifier` 和 `FeedbackLoop` 将测试结果转为结构化修正信息并加入下一轮，而非要求 LLM 自我评价。
+- **危险动作/重点贡献**：治理是主角维度。危险动作进入 HITL；批准绑定 tool call ID、名称和规范化参数并单次消费；拒绝、取消和过期不会留下批准。项目变更批准同样绑定 manifest 摘要和目标集合。
+- **记忆**：`sql.js` MemoryStore 按 projectPath 隔离约定、决策和知识，ContextBuilder 只检索相关条目。
+- **可单测性**：移除真实 LLM 后，mock/stub 测试仍覆盖工具分发、治理、反馈回灌、记忆和停机；静态演示固定重放危险动作阻止与失败后行动变化。
+
+## 10. 非功能需求与威胁模型
+
+- **安全**：服务默认 loopback；静态/public 不接收 Key 或注册进程工具；秘密不进入日志、URL、历史或客户端持久状态；路径拒绝 traversal、`.git` 和符号链接。
+- **可靠性**：导出核对大小与 SHA-256，staging 后 rename；manifest 或 artifact 改变会使批准失效。
+- **性能**：单用户并发受限，接口限流；历史保存和中止有超时。
+- **可用性**：凭据仅有“仅本次使用”和“记住在此设备”；keyring 不可用时提供明确降级说明。
+- **可观测性**：SSE 输出结构化阶段事件，错误使用稳定且不含秘密的代码。
+- **攻击边界**：防御远程请求、模型输出和无意路径错误；不宣称抵御同一 OS 账户下恶意进程主动竞态。
+
+## 11. 架构、数据流与外部依赖
+
+本地 React WebUI 调用 loopback Express；Server 组合 RuntimePolicy、SessionRegistry、AgentRun、CredentialStore 与 SSEManager；AgentLoop 通过 LLMAdapter 决策，经 ToolRegistry/Governance 执行动作，测试反馈与 MemoryStore 返回 ContextBuilder。静态演示使用独立 Vite 入口，依赖闭包不含 Server、凭据或进程工具。
+
+外部依赖为 DeepSeek HTTPS API、操作系统凭据库及 Node.js 文件/进程接口；Express、React、Vite 分别承担 API、UI 和构建。不使用现成 Agent 编排框架。
+
+## 12. 数据模型
+
+- `Session`：ID、workspace、状态、消息、工具调用、反馈与时间。
+- `MemoryEntry`：ID、projectPath、类型、内容、标签、时间；查询和删除按项目隔离。
+- `ArtifactRecord`：relativePath、operation、size、sha256、timestamp、toolCallId。
+- `ExportManifest`：sessionId 与 ArtifactRecord 集合；完成导出不可覆盖。
+- `CredentialStatus`：storage 与 hasKey，不包含秘密。
+
+## 13. 技术选型、UI 与分发
+
+TypeScript 让 Core、Server、React 共享类型；Node.js 22 提供文件、子进程和 npm 分发生态；Vitest/Node test 支持确定性测试；DeepSeek 位于可替换的 `LLMAdapter` 后。
+
+前端沿用已有轻量 CSS token 和 React 组件，没有引入 Open Design skill；这是收尾阶段避免大规模视觉重写的明确偏差。静态机制演示采用高对比时间线，并以脚本验证依赖边界。
+
+分发选择 npm tarball/CLI，目标为 Node.js 22 支持的 Windows、macOS、Linux；原生 keyring 依赖平台凭据服务。GitHub Pages 只分发静态演示，不部署完整服务器。
+
+## 14. 验收标准
+
+- typecheck、全测试、build 和 package verifier 退出 0。
+- mock LLM 确定性证明危险拦截、反馈导致行动变化及一次性批准。
+- 静态 bundle 不含 Key、Express、child process、本地 API 或 keyring。
+- 凭据支持 set/status/update/delete 且不回显；keyring 不可用时不生成替代文件。
+- 产物导出到项目 `.harness/outputs/<session-id>/`，临时 workspace 清理后仍可读。
+- 项目应用先预览；替换标危险；批准单次使用，内容改变后拒绝。
+- clean pack/install 后 CLI 提供 loopback health/WebUI，终止后释放端口。
+
+## 15. 风险与未决问题
+
+- Linux 没有 Secret Service 时持久凭据不可用，只能使用临时 Key。
+- 原生 keyring 需要受支持 OS/CPU；未承诺代码签名或单文件二进制。
+- Pages URL、Release tag 与附件 URL 只有远端工作流实际成功后才能记录。
+- `REFLECTION.md` 必须由学生本人修订至 1500–2500 字，并纠正历史部署说法。
