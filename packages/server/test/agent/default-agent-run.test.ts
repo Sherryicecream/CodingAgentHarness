@@ -90,4 +90,16 @@ describe('default agent run lazy privileged boundary', () => {
     expect(approve).toHaveBeenCalledWith(true);
     expect(continueAfterApproval).toHaveBeenCalledTimes(1);
   });
+
+  it('forwards an explicitly selected provider to the privileged run', async () => {
+    let resolveLoader!: (module: Awaited<ReturnType<PrivilegedAgentRunLoader>>) => void;
+    const innerRun = vi.fn(() => ({ completion: Promise.resolve<AgentRunOutput>({ status: 'completed' }) }));
+    const createPrivilegedAgentRun = vi.fn(() => innerRun);
+    const loader: PrivilegedAgentRunLoader = () => new Promise((resolve) => { resolveLoader = resolve; });
+    const run = createDefaultAgentRun({ policy: PUBLIC_RUNTIME_POLICY, credentialStore: emptyCredentialStore, privilegedLoader: loader });
+    const started = run({ ...input, mode: 'server', providerId: 'deepseek' });
+    resolveLoader({ createPrivilegedAgentRun });
+    await ('completion' in started ? started.completion : started);
+    expect(innerRun).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'deepseek' }));
+  });
 });

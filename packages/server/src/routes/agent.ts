@@ -33,7 +33,7 @@ const DEFAULT_RUN_RATE_WINDOW_MS = 60 * 60 * 1_000;
 const DEFAULT_RUN_RATE_LIMIT = 20;
 const DEFAULT_SESSION_RATE_LIMIT = 20;
 const MAX_TASK_LENGTH = 1_000;
-const RUN_FIELDS = new Set(['sessionId', 'task', 'mode', 'apiKey']);
+const RUN_FIELDS = new Set(['sessionId', 'task', 'mode', 'apiKey', 'providerId']);
 
 export interface RunRateLimitOptions {
   readonly windowMs?: number;
@@ -82,13 +82,14 @@ interface ValidatedRunRequest {
   readonly task: string;
   readonly mode: RuntimeExperience;
   readonly apiKey?: string;
+  readonly providerId?: string;
 }
 
 const validateRunRequest = (body: unknown): ValidatedRunRequest | null => {
   if (!isPlainObject(body) || Object.keys(body).some((key) => !RUN_FIELDS.has(key))) {
     return null;
   }
-  const { sessionId, task, mode, apiKey } = body;
+  const { sessionId, task, mode, apiKey, providerId } = body;
   if (
     typeof sessionId !== 'string'
     || sessionId.length === 0
@@ -97,12 +98,13 @@ const validateRunRequest = (body: unknown): ValidatedRunRequest | null => {
     || task.length > MAX_TASK_LENGTH
     || typeof mode !== 'string'
     || (apiKey !== undefined && typeof apiKey !== 'string')
+    || (providerId !== undefined && (typeof providerId !== 'string' || providerId.length === 0))
     || (mode === 'byok' && (typeof apiKey !== 'string' || apiKey.length === 0))
     || (mode !== 'byok' && apiKey !== undefined)
   ) {
     return null;
   }
-  return { sessionId, task, mode: mode as RuntimeExperience, apiKey };
+  return { sessionId, task, mode: mode as RuntimeExperience, apiKey, providerId };
 };
 
 const toRunHandle = (
@@ -510,6 +512,7 @@ export const createAgentRouter = (
         task: input.task,
         mode: input.mode,
         apiKey: input.apiKey,
+        providerId: input.providerId,
         emit: emitWhileActive,
       }));
     } catch {

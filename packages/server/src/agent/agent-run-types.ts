@@ -8,6 +8,7 @@ export interface AgentRunInput {
   readonly session: PublicSession;
   readonly task: string;
   readonly mode: RuntimeExperience;
+  readonly providerId?: string;
   readonly apiKey?: string;
   readonly emit: (type: SSEEvent['type'], data: unknown) => void;
 }
