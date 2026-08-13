@@ -56,6 +56,9 @@ describe('configuration policy boundary', () => {
     ['post', '/api/config/lock'],
     ['delete', '/api/config/key'],
     ['get', '/api/config/guide'],
+    ['get', '/api/config/providers'],
+    ['post', '/api/config/providers'],
+    ['delete', '/api/config/providers/fake-provider'],
   ] as const)('returns 403 for public %s %s without touching credentials', async (method, path) => {
     const app = createApp({ mode: 'public', credentialStore: throwingStore() });
 

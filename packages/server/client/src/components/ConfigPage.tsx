@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import type { RuntimeMode } from '../hooks/useRuntimeInfo.js';
+import { ProviderConfiguration } from './ProviderConfiguration.js';
 
 type CredentialState = 'empty' | 'legacy' | 'locked' | 'unlocked';
 
@@ -178,10 +179,19 @@ export function ConfigPage({ mode }: ConfigPageProps) {
           </div>
         </div>
       )}
+      {(state === 'empty' || state === 'legacy' || state === 'unlocked') && (
+        <ProviderConfiguration
+          needsMasterPassword={needsMasterPassword}
+          masterPassword={masterPassword}
+          onMasterPasswordChange={setMasterPassword}
+          onCredentialChange={refreshStatus}
+          onMessage={setMessage}
+        />
+      )}
       {message && <div className="card" role="status">{message.text}</div>}
       {testResult && <div className="card">{testResult.valid ? '连接成功' : `连接失败：${testResult.error ?? ''}`}</div>}
       <div className="card" style={{ marginTop: 16 }}>
-        主密码只用于解锁本机加密凭据，不会写入浏览器或日志。忘记主密码后无法恢复密钥，只能清除并重新配置。
+        主密码只用于解锁本机加密凭据，不会写入浏览器或日志。忘记主密码后无法恢复密钥，只能清除并重新配置。本地模式信任边界是 localhost 与操作系统用户账户；不提供登录认证。
       </div>
     </div>
   );

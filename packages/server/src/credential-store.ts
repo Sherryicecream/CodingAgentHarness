@@ -37,6 +37,7 @@ export interface CredentialStore {
   initialize(masterPassword: string): void;
   hasKey(service: string): boolean;
   getKey(service: string): string | null;
+  getKeys?(servicePrefix: string): Record<string, string>;
   setKey(service: string, key: string): void;
   deleteKey(service: string): void;
   listServices(): string[];
@@ -191,6 +192,17 @@ export function createCredentialStore(options: CredentialStoreOptions = {}): Cre
       const entry = envelope?.entries[service];
       if (!entry || !derivedKey) return null;
       try { return decrypt(entry, derivedKey); } catch { return null; }
+    },
+
+    getKeys(servicePrefix: string): Record<string, string> {
+      const envelope = readEnvelope();
+      if (!envelope || !derivedKey) return {};
+      const values: Record<string, string> = {};
+      for (const [service, entry] of Object.entries(envelope.entries)) {
+        if (!service.startsWith(servicePrefix)) continue;
+        try { values[service] = decrypt(entry, derivedKey); } catch { /* Ignore corrupt entries. */ }
+      }
+      return values;
     },
 
     setKey(service: string, key: string): void {

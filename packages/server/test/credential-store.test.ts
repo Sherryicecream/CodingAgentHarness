@@ -59,4 +59,17 @@ describe('master-password credential store', () => {
     expect(legacy.getState()).toBe('legacy');
     expect(legacy.getKey('harness/deepseek-api-key')).toBeNull();
   });
+
+  it('reads an unlocked credential prefix in one encrypted-envelope snapshot', () => {
+    const { store } = makeStore();
+    store.initialize(PASSWORD);
+    store.setKey('harness/provider/one', 'fake-provider-record-one');
+    store.setKey('harness/provider/two', 'fake-provider-record-two');
+    store.setKey('harness/deepseek-api-key', KEY);
+
+    expect(store.getKeys?.('harness/provider/')).toEqual({
+      'harness/provider/one': 'fake-provider-record-one',
+      'harness/provider/two': 'fake-provider-record-two',
+    });
+  });
 });
