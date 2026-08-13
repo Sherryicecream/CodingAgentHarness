@@ -1,5 +1,14 @@
 # Agent 日志
 
+## 2026-08-13 — 文件保留与 Provider 配置收尾
+
+- **任务**：简化 Provider 配置体验，并为任务文件增加用户主动保存的长期保留路径。
+- **过程/技能**：先阅读现有 README、SPEC、PLAN 与实现；采用测试先行和安全边界审查，未修改 `REFLECTION.md`。
+- **实现**：Provider 高级字段默认折叠；workspace 增加 `temporary`/`preserve` 策略；新增 `POST /api/agent/sessions/:sessionId/save`，固定输出到 `.harness/outputs/`，拒绝路径穿越、绝对路径、符号链接和非普通文件；public 模式返回 `403 PERSISTENCE_DISABLED`。
+- **提交**：`1c06232`、`c1077a3`、`deec9b3`；Provider adapter 安全 seam 为 `9076606`。
+- **边界/人工干预**：未触碰真实凭据、未修改 master、未发布或推送 Release；`REFLECTION.md` 保持原样。adapter seam 尚未宣称已接入 run-route。
+- **教训**：临时工作区适合自动回收；长期文件必须由用户明确保存并落到项目输出目录，public demo 不应获得持久化能力。
+
 > 本日志保留 2026-08-12 final-delivery hardening 中可由 briefs、reports 和 Git commits 核验的记录。没有原始证据的 prompt 原文、外部操作或角色名称不作补写。
 
 ## 记录字段

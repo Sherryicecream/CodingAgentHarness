@@ -139,3 +139,11 @@ npm.cmd run build
 - 公开演示事件使用结构化 allowlist 投影，避免回显任意输入。
 - 不要提交真实 Key、主密码、`.env` 或凭据文件。
 - 不要把本地可信模式暴露给其他用户或不受信网络。
+
+## 文件保留与导出
+
+任务工作区默认使用 `temporary` 策略：任务完成或失败后由服务端回收。需要长期保留时，用户必须主动调用保存操作；文件会复制到当前项目下的 `.harness/outputs/`，并将工作区标记为 `preserve`。`preserve` 文件不会被后台 sweep 自动删除，只能由用户手动清理。
+
+保存接口为 `POST /api/agent/sessions/:sessionId/save`。它只接受已签发 session 的直接子文件，并拒绝路径穿越、绝对路径、符号链接和非普通文件。`public` 模式不提供持久化，调用会返回 `403 PERSISTENCE_DISABLED`。
+
+当前 WebUI 已提供 Provider 配置管理；Provider adapter factory 目前是安全的本地 seam，尚未接入完整 run-route 的 Provider 选择流程。真实 LLM 与完整工具仍以本地可信模式为边界。

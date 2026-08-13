@@ -102,6 +102,13 @@
 - AGENT_LOG 记录 Task 1–5 的任务、技能/上下文、执行角色证据、提交、人工干预与教训。
 - `REFLECTION.md` 不修改。
 
+## Task 9：本地文件保留与配置体验（已完成）
+
+- `1c06232`：Provider 配置页默认折叠高级字段，并在锁定凭据时隐藏详情。
+- `c1077a3`：增加 `temporary`/`preserve` workspace 生命周期和安全导出到 `.harness/outputs/`。
+- `deec9b3`：证明 public 模式拒绝持久化并返回 `PERSISTENCE_DISABLED`。
+- Provider adapter factory (`9076606`) 仍是安全 seam，尚未接入完整 run-route Provider 选择。
+
 ## 最终门槛
 
 1. `npm.cmd run test:docs`

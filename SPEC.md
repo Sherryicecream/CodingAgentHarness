@@ -124,6 +124,19 @@ POST /api/agent/run               -> sessionId, task, mode, local apiKey（仅 l
 | 服务器凭据 | scrypt + AES-256-GCM | `~/.harness/credentials.enc` |
 | BYOK Key | 请求/组件内存 | 运行完成、失败、切换或卸载即清除 |
 
+### 4.1 工作区文件保留
+
+Session workspace 的保留策略为：
+
+- `temporary`（默认）：任务完成或失败后可由 sweep 回收；运行中或未过期的 session 受保护。
+- `preserve`：不会被自动 sweep 删除，直到用户手动清理。
+
+用户主动保存文件使用 `POST /api/agent/sessions/:sessionId/save`。服务端只允许已签发 workspace 的直接子文件，并将副本写入绝对项目目录下的 `.harness/outputs/`；路径穿越、绝对路径、符号链接和非普通文件必须拒绝。`public` 模式必须在访问凭据或文件系统前返回 `403 PERSISTENCE_DISABLED`。
+
+### 4.2 Provider 配置边界
+
+本地 Provider 配置以加密凭据存储为后端；Provider adapter factory 只允许受控的本地 allowlist 和固定 HTTPS endpoint，并在 public 模式拒绝创建。该 factory 当前是供后续执行流程使用的安全 seam，尚未接入完整 `run` route 的 Provider 选择或切换；文档不得把它描述为已完成的多 Provider 运行能力。
+
 本地 BYOK 不写入 localStorage、sessionStorage、URL、日志、分析状态或会话。服务器凭据只能由本地用户通过主密码生命周期管理；忘记主密码不能恢复 Key。
 
 ## 5. 分发与启动
