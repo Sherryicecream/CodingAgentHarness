@@ -1,5 +1,5 @@
 import { isIP } from 'node:net';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import cors from 'cors';
 import express, { type Express } from 'express';
