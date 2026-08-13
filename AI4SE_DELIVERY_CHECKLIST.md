@@ -15,8 +15,8 @@
 | 声明式配置 | `packages/core/src/config/` | config tests | 完成 |
 | 凭据安全存储 | `credential-keyring.ts` + memory-only BYOK | Server tests；状态不回显 | 完成 |
 | 首次录入/状态/更新/清除 | 本地 ConfigPage + config routes | credential/route tests | 完成 |
-| 分发 | Core/Server/CLI npm tarball | `verify:packages`、Windows CLI 4/4、[v0.1.0 Release](https://github.com/Sherryicecream/CodingAgentHarness/releases/tag/v0.1.0) | 完成：三个 tarball 与校验清单均公开验收 |
-| 本地完整 WebUI | loopback Express + React | clean installed CLI lifecycle | 完成 |
+| 历史分发 | Core/Server/CLI npm tarball | `verify:packages`、[v0.1.0 Release](https://github.com/Sherryicecream/CodingAgentHarness/releases/tag/v0.1.0) | 完成：`99d7906` 的三个 tarball 与校验清单均公开验收；不包含其后的 Windows 生命周期修复 |
+| 最终源码与本地完整 WebUI | loopback Express + React | Node 22 CLI 4/4；health/config/WebUI/stop | 完成：最终源码中 HTTP listener 就绪后才报告可用，Shell 超时完成进程树回收，关闭后端口连续不可达 |
 | 线上 WebUI | serverless static mechanism demo | static build/boundary + [CI #66](https://github.com/Sherryicecream/CodingAgentHarness/actions/runs/31708083604) | 完成：[Pages 根页面](https://sherryicecream.github.io/CodingAgentHarness/)与 JS/CSS 均实测 200 |
 | Mock 机制演示 | Core/Server demo + static timeline | deterministic tests | 完成 |
 
@@ -47,7 +47,7 @@ npm.cmd run check:docs
 npm.cmd audit --omit=dev
 ```
 
-当前本地证据：Core 297/297、Server 197/197、Windows CLI 4/4；生产依赖审计 0 个已知漏洞。
+当前本地证据：官方 Node.js 22.23.2 便携运行时下 Core 300/300、Server 199/199、Windows CLI 4/4；完整 build、typecheck 和 package entry 验证通过；生产依赖审计 0 个已知漏洞。该组数字属于最终源码；`v0.1.0` 是固定在 `99d7906` 的历史附件证据。
 
 ## 上传后核验与剩余事项
 

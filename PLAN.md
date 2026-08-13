@@ -41,7 +41,7 @@
 | 1 | 危险工具风险进入 Governance/HITL；`packages/core/src/tools/tool.ts`、`guardrail/*`、`loop/agent-loop.ts` | `packages/core/test/guardrail/*.test.ts`、`loop/agent-loop.test.ts` | 原始 Tasks 10–20、38 | `8a5662c`, `4fbf033`, `5398188`, `bb426ea`, `6d33edf` | 完成 |
 | 2 | MemoryStore 按项目隔离并注入 AgentLoop；`packages/core/src/memory/*`、`loop/context-builder.ts`、Server 生产装配 | `packages/core/test/memory/memory-store.test.ts`、`loop/context-builder.test.ts`、Server agent tests | Task 1；原始 Tasks 33–38 | `7873131`, `2469f5b`, `a62658b` | 完成 |
 | 3 | 证明失败反馈改变下一轮 Mock 行动；`packages/core/src/feedback/*`、`llm/mock.ts`、demo | `packages/core/test/demo/feedback-demo.test.ts`、`loop/agent-loop.test.ts`、Server demo tests | Tasks 1–2 | `c48746d`, `750d787` | 完成 |
-| 4 | npm tarball 与安装后 CLI 启动；三个 `package.json`、`packages/cli/src/cli.ts`、Server build | `packages/cli/test/installed-runtime.test.mjs`、`scripts/verify-packages.mjs` | Core/Server build | `1666103`, `993ee8f`；本轮 Windows 清理修复 | 完成：Windows 4/4，health/配置/WebUI/端口回收通过 |
+| 4 | npm tarball 与安装后 CLI 启动；三个 `package.json`、`packages/cli/src/cli.ts`、Server build | `packages/cli/test/installed-runtime.test.mjs`、`scripts/verify-packages.mjs` | Core/Server build | `1666103`, `993ee8f`, `f350aa2`, `8be1a6d`, `ddc9537` | 完成：Windows Node 22 CLI 4/4，监听就绪、health/配置/WebUI/端口与 Shell 子进程回收通过 |
 | 5 | OS keyring、memory-only Key、配置状态和认证分类；`credential-keyring.ts`、`credential-store.ts`、`routes/config.ts`、`routes/test-key.ts`、`ConfigPage.tsx` | credential/config/test-key tests；401/402/429/5xx/连接失败分类 | Task 4、本地模式 | `e6796a3`, `badd838` | 完成 |
 | 6 | 会话产物追踪、SHA-256 manifest、原子导出；`session/artifact-tracker.ts`、`artifact-exporter.ts`、`workspace-manager.ts` | artifact/workspace tests，拒绝穿越、链接、摘要变化和覆盖 | Server session、Task 1 | `e6796a3`, `dc7d52e` | 完成 |
 | 7 | 项目变更预览、摘要绑定和单次批准；`session/project-change-applier.ts`、agent routes/UI | `project-change-applier.test.ts` 与 route/UI tests | Task 6 | `921ba04` | 完成 |
@@ -67,18 +67,18 @@ Tasks 1–3 的内部修复存在共享 Core 状态，按顺序完成；Task 5�
 2026-08-13 最近一次本地审查：
 
 - workspace typecheck：通过。
-- Core：297/297。
-- Server：197/197。
+- Core：300/300。
+- Server：199/199。
 - 文档一致性：10/10。
 - npm package entry、完整 build、静态 build/boundary：通过。
 - API/凭据专项：10/10。
 - 产物/工作区专项：47/47。
 - public 安全演示专项：75/75。
 - 生产依赖 audit：0 个已知漏洞。
-- 实际本地 Server：health 200、WebUI 200；本机 OS keyring 状态为可用但未保存 Key。
-- CLI Windows 自动生命周期：修复测试 fixture 精确 PID 清理后，当前 4/4 通过；packed CLI 验证 health、配置状态、WebUI 与端口回收。
+- 实际本地 Server：Node.js 22.23.2 下 health 200、配置状态 200、WebUI 200；禁用 keyring 的验收环境明确返回 `storage=unavailable`、`hasKey=false`，关闭后端口连续 3 次不可达。
+- CLI Windows 自动生命周期：当前 4/4 通过；packed CLI 验证 health、配置状态、WebUI 与端口回收。`startServer()` 等待 HTTP listener 就绪，`execute_shell` 超时后等待 Windows 进程树终止，避免误报可用或锁定工作区。
 - Release 文档更新前的 GitHub Actions CI #66（run `31708083604`）：`unit-test` 与 `deploy-static-demo` 均成功；后续文档提交的 CI 也按相同门槛独立核验。Pages 静态机制演示 `sherryicecream.github.io/CodingAgentHarness/` 的根页面、JavaScript 与 CSS 均实测 HTTP 200。真实可点击 URL 记录在 `AI4SE_DELIVERY_CHECKLIST.md`。
-- GitHub Release `v0.1.0`（Release ID `369970882`）已公开：annotated tag 指向 `99d7906`，三个 tarball 与 `SHA256SUMS.txt` 均从公开下载路径实测 HTTP 200，文件大小和 SHA-256 与本地验证制品一致。
+- GitHub Release `v0.1.0`（Release ID `369970882`）已公开：annotated tag 指向 `99d7906`，三个 tarball 与 `SHA256SUMS.txt` 均从公开下载路径实测 HTTP 200，文件大小和 SHA-256 与当时本地验证制品一致。该历史 Release 不包含之后的 Windows Shell 进程树与 listener 就绪修复；最终提交源码 ZIP 单独承载并验证这些修复。
 
 ## 6. 最终复核命令
 

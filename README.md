@@ -52,11 +52,11 @@ npm.cmd run dev --workspace @harness/server
 
 ## 本地 CLI
 
-CLI 是本地服务器启动器；它解析已安装的 `@harness/server` 包并尝试打开浏览器。
+当前源码中的 CLI 是本地服务器启动器；它解析已安装的 `@harness/server` 包，等待回环 HTTP 监听真正就绪后再显示可用地址并尝试打开浏览器。若端口占用或监听失败，启动 Promise 会拒绝并输出失败原因，不会把“已调用 listen”误报为“已可访问”。
 
 ## 分发
 
-项目选择 GitHub Release 附件形式的 npm 包/CLI 分发。`v0.1.0` 已发布，并在发布前用 `npm.cmd run verify:packages` 验证 Core、Server、CLI tarball 入口。真实可点击的 Release 与附件地址记录在 `AI4SE_DELIVERY_CHECKLIST.md`；目标机器需要 Node.js 22，持久 Key 依赖 Windows Credential Manager、macOS Keychain 或 Linux Secret Service；Linux 无 Secret Service 时使用“仅本次使用”。这些附件没有发布到 npm registry，因此不要把 `npm install -g @harness/cli` 当作可用安装方式。
+项目曾以 GitHub Release 附件形式分发 npm 包/CLI。`v0.1.0` 已发布，并在发布前用 `npm.cmd run verify:packages` 验证 Core、Server、CLI tarball 入口。该 Release 固定在提交 `99d7906`，早于最终源码对 Windows Shell 进程树和 HTTP listener 就绪的修复；课程最终验收应以并列提交的源码 ZIP 为准，不应把下述历史附件视为包含这些后续修复。真实可点击的 Release 与附件地址记录在 `AI4SE_DELIVERY_CHECKLIST.md`；目标机器需要 Node.js 22，持久 Key 依赖 Windows Credential Manager、macOS Keychain 或 Linux Secret Service；Linux 无 Secret Service 时使用“仅本次使用”。这些附件没有发布到 npm registry，因此不要把 `npm install -g @harness/cli` 当作可用安装方式。
 
 从仓库构建并运行：
 
@@ -178,7 +178,8 @@ npm.cmd run build
 - PowerShell 执行策略可能阻止 `npm.ps1`；使用 `npm.cmd`。
 - 部分 Agent Shell 命令仍假设类 Unix 命令和路径；需要这些命令时优先使用 Git Bash 或 WSL，并先审查命令。
 - CLI 的自动打开浏览器依赖桌面环境；无图形界面时可手动访问回环地址。
-- CLI 自动化测试会构建并打包三个 workspace，在临时目录安装 tarball，启动 loopback 服务，验证 health 与 WebUI，终止进程并确认端口关闭。2026-08-13 在 Windows 上修复 detached fixture 的精确 PID 清理后，完整 suite 4/4 通过；packed CLI 的 health、配置状态、WebUI 与端口回收均已验证。
+- CLI 自动化测试会构建并打包三个 workspace，在临时目录安装 tarball，启动 loopback 服务，验证 health 与 WebUI，终止进程并确认端口关闭。2026-08-13 使用 Node.js 22.23.2 在 Windows 上完成全新路径复核：CLI 4/4、Core 300/300、Server 199/199；packed CLI 的 health、配置状态、WebUI 与端口回收均通过。该证据针对最终源码，不追溯改变 `v0.1.0` 附件。
+- `execute_shell` 在 Windows 超时时会终止命令 shell 的整个进程树，并在清理完成后才返回；这避免后台子进程继续占用工作区或端口。清理命令只接收运行时 PID，不拼接用户命令文本。
 
 ## 安全说明
 

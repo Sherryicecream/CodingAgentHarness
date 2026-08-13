@@ -167,6 +167,14 @@ Git 历史显示，项目先后形成初始 `SPEC.md`（`bb4839d`）、两次架
 
 本地存在旧 `dist`，一度掩盖 CLI 对 `@harness/server` 类型的干净环境依赖；GitHub runner 暴露后由 `13236a3` 修正。随后发现 CI trigger 接受 `master`，但 Pages deploy condition 只允许 `main`，由 `bf88990` 修正并加入回归断言。CI 状态可通过公开徽章核验；Pages 是否启用属于仓库外部设置，不能仅凭 workflow 文件宣称 URL 已可访问。
 
+### 7.4 提交包复核与“测试通过”目标修正
+
+最终源码 ZIP 用官方 SHA-256 校验的 Node.js 22.23.2 便携运行时重新解压、安装和执行。首轮完整测试暴露两个不能用“CI 曾经成功”替代的问题：Windows `exec` 超时只结束 shell、后代仍锁定 cwd；Server 调用 `listen()` 后立即返回、CLI 因而可能在 HTTP 尚未 ready 时报告地址。
+
+用户进一步把成功标准明确为“保证其他人能正常使用”。方案比较后没有采用吞掉 `EBUSY`、删除断言或单纯扩大 timeout，而是选择生产生命周期修复：PID 参数化的 `taskkill /T /F` 完成后工具才返回；`startServer()` 在 listening 回调后才解析并传播绑定错误。两个缺陷均先用 Node 22 在普通 Windows 进程环境观察 RED，再实现最小修复并完成 focused、workspace、packed tarball 和实际 HTTP/关闭验收。该轮说明最终复核的对象应是用户入口和资源生命周期，而不是某一历史 CI 标记。
+
+独立代码审阅又把“完成”标准推进了一步：参数数组只能防止命令文本注入，不能阻止裸 `taskkill` 的搜索路径劫持；异步 `error` 清理也不能覆盖 `listen()` 同步抛错。最终实现固定系统目录下的可执行文件、校验退出码，并让同步/异步启动错误都先关闭应用资源。审阅同时发现 `v0.1.0` 固定在修复前的 `99d7906`，因此文档把历史 Release 与最终源码 ZIP 的证据分开陈述，不追溯声称旧附件包含新修复。
+
 ## 8. Brainstorming 与 Superpowers 方法反思
 
 ### 做得好的地方
