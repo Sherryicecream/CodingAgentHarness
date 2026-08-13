@@ -70,3 +70,21 @@ it('submits the API key with the first master password', async () => {
   await userEvent.click(screen.getByRole('button', { name: '保存 DeepSeek API Key' }));
   expect(fetchSpy).toHaveBeenCalledWith('/api/config/key', expect.objectContaining({ method: 'POST' }));
 });
+
+it('requires matching confirmation before saving a new master password', async () => {
+  const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input) === '/api/config/status') return response({ hasKey: false, source: 'none', state: 'empty' });
+    if (String(input) === '/api/config/guide') return response({ needsSetup: true, message: '', instructions: [] });
+    return response({ status: 'ok' });
+  });
+  vi.stubGlobal('fetch', fetchSpy);
+  render(<ConfigPage mode="local" />);
+  await screen.findByLabelText(/DeepSeek API Key/);
+  await userEvent.type(screen.getByLabelText(/DeepSeek API Key/), 'sk-test-value');
+  await userEvent.type(screen.getByLabelText(/首次设置主密码/), 'correct horse battery staple');
+  const confirmation = screen.getByLabelText(/确认主密码/);
+  await userEvent.type(confirmation, 'different password');
+  await userEvent.click(screen.getByRole('button', { name: '淇濆瓨 DeepSeek API Key' }));
+  expect(screen.getByRole('status')).toHaveTextContent(/主密码不一致/);
+  expect(fetchSpy).not.toHaveBeenCalledWith('/api/config/key', expect.anything());
+});
