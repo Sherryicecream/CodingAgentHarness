@@ -1,5 +1,16 @@
 # Agent 日志
 
+## 2026-08-13 — 本地预览反馈与最终交付复核
+
+- **问题与修复**：推荐演示写文件未进入 ArtifactTracker（`badd838`）；npm workspace 启动导致项目根误判（`343fe78`, `bf4693e`）；完成会话被 sweep 立即回收导致导出失败（`dc7d52e`）。
+- **凭据诊断**：连接测试改为 DeepSeek `/models` 认证请求，不生成对话；稳定区分 Key 无效、计费、限流、服务故障与本机网络错误。真实 Key 不进入日志或响应。
+- **验证**：Server 23 files/197 tests、Core 31 files/297 tests、CLI lifecycle 4/4、全 workspace typecheck、build、package verifier、静态边界和生产依赖审计通过。
+- **人工干预**：用户在真实 WebUI 中复现“导出失败”和“测试连接失败”，促使从单元测试扩展到真实本地预览链路检查。
+- **教训**：构建成功不等于主页可访问；工具写成功不等于产物已登记；完成状态不应等于立即可回收；错误码必须能指导用户行动。
+- **分支完成**：`finishing-a-development-branch` 全量验证通过后，用户选择“本地合并到 master”；形成 merge commit `ebc225f`。本次收尾未创建 PR，是用户在技能菜单中的明确集成选择；该偏差记录于 `SPEC_PROCESS.md`。
+
+> 下文 2026-08-12 的数字与 Provider/加密文件描述是当时历史记录，已被以上当前实现取代，不应作为最终产品现状。
+
 ## 2026-08-13 — 本地优先最终收尾
 
 - **决策**：不部署服务器；线上交付为不接收 Key 的静态机制演示，完整功能通过 loopback CLI/WebUI 运行。

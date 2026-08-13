@@ -4,13 +4,29 @@
 
 > 2026-08-13 更新：旧状态表保留为历史证据。当前实现已在 `993ee8f` 恢复全仓类型/测试/构建基线，并在 `e6796a3` 完成 OS 凭据库、清单导出和静态演示；随后补充单次审批绑定的项目应用流程与 GitHub Pages 工作流。CLI 自动 clean-install/start/WebUI/cleanup 现为 4/4 通过，旧“部分闭合”结论不再代表当前状态。
 
+## 当前权威状态（2026-08-13）
+
+下表取代后文 2026-08-12 的历史状态表；后文仅用于保存当时的 TDD/评审过程证据。
+
+| Task | 当前结果 | 关键提交 | 验证 | 状态 |
+| --- | --- | --- | --- | --- |
+| 1–3 | Governance/HITL、项目记忆隔离、反馈因果性 | 历史提交见下文 | Core 297/297 | 已闭合 |
+| 4 | npm tarball 与 CLI clean install/start/WebUI/cleanup | `993ee8f` | CLI 4/4 | 已闭合 |
+| 5 | OS 凭据库、内存临时 Key、状态/更新/清除/认证分类 | `e6796a3`, `badd838` | Server credential/route tests | 已闭合 |
+| 6 | 会话产物追踪、manifest 原子导出、到期前保留 | `e6796a3`, `dc7d52e` | Server 197/197 | 已闭合 |
+| 7 | 项目变更预览、摘要绑定、单次批准 | `921ba04` | project-change tests 3/3 | 已闭合 |
+| 8 | 无服务器静态 WebUI、Pages CI、依赖边界 | `921ba04` | static build/boundary pass | 已闭合 |
+| 9 | AI4SE 文档、分发和最终验证 | `192294e` + 本次文档提交 | docs/typecheck/build/package pass | 已闭合（反思由学生修改） |
+
+依赖关系：1–3 为 Harness 内核；4–5 为本地运行前提；6 依赖会话/工具；7 依赖 6；8 可独立构建但发布依赖 CI；9 依赖全部工程任务。可并行部分为 Core 机制、凭据适配、静态演示；导出与项目应用必须串行。
+
 ## 状态定义
 
 - **已闭合**：要求的实现、测试证据、审查修复与提交均存在。
 - **部分闭合**：产品修复存在，但指定的端到端自动化证据仍有明确间隙。
 - **本轮执行**：正在按本计划处理，不推导整个仓库或 release 的完成状态。
 
-这份表是本轮唯一状态来源。旧计划中的阶段数量、历史测试总数和早期分发目标不再作为当前验收结论。
+以下 2026-08-12 表格和段落为历史快照，不是当前验收结论。
 
 ## 加固任务总表
 
@@ -121,12 +137,11 @@
 6. `git diff --staged --check`，审查秘密词命中上下文，并确认 `REFLECTION.md` 无差异。
 7. 原子提交信息：`docs: align final local delivery contract`。
 
-## 明确保留的关注项
+## 历史关注项（现状见文首权威状态）
 
-- Task 4 的自动 Windows clean-install/cleanup 成功证据尚未闭合。
-- 2026-08-12 最终复验中，完整 CLI suite 在无输出状态下超过 240 秒并被终止；仅两个非安装 CLI 检查 2/2 通过，不能推出 clean-install/start/cleanup 自动验证成功。
+- Task 4 的自动 Windows clean-install/cleanup 间隙已由当前 CLI 4/4 测试闭合。
 - Task 5 测试的端口预留竞态和路径空白直接覆盖可后续加强。
-- 任务报告记录的旧 Server 独立 `tsc --noEmit` 错误不属于本轮文档修改；不能宣称全仓类型检查通过。
+- 旧 Server typecheck 错误已由当前全 workspace typecheck 闭合。
 - `REFLECTION.md` 只读复核发现 2,696 个汉字，超过 2,500 上限，且含未核验部署/历史数字和文字问题；只有学生本人可按忽略目录中的 checklist 修改正文。
 - `submission.jsonc` 保持只读；其 `is_deployed: true` 和公网地址未在本轮访问或核验，也未改成 Release URL。
 - Release 附件的最终 URL、tag 和文件名只有实际发布后才能记录；本计划不执行发布、推送或外部操作。

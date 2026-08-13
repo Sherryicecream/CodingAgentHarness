@@ -37,6 +37,8 @@ coverage/
 docs/superpowers/specs/
 .harness-sessions/
 .harness-workspaces/
+.harness/
+.harness-memories.db
 
 # Machine-local agent settings
 .claude/settings.local.json

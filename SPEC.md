@@ -126,8 +126,8 @@ POST /api/agent/run               -> sessionId, task, mode, local apiKey（仅 l
 
 Session workspace 的保留策略为：
 
-- `temporary`（默认）：任务完成或失败后可由 sweep 回收；运行中或未过期的 session 受保护。
-- `preserve`：不会被自动 sweep 删除，直到用户手动清理。
+- `temporary`（默认）：完成或失败后仍保留到 `expiresAt`（默认一小时），允许用户导出；到期后由 sweep 回收。
+- durable export：经过摘要校验的副本位于项目 `.harness/outputs/<session-id>/`，不随 session 回收。
 
 用户主动导出使用 `POST /api/agent/sessions/:sessionId/save`。服务端按会话清单核对路径、大小和 SHA-256，再原子写入 `.harness/outputs/<session-id>/` 与 `manifest.json`；路径穿越、符号链接、摘要变化和覆盖既有导出必须拒绝。
 
@@ -154,13 +154,14 @@ npm.cmd start --workspace @harness/server
 
 CLI 运行：先构建三个包，再执行 `npm.cmd start --workspace @harness/cli`；已安装 tarball 提供 `harness` 命令。
 
-## 6. 验收证据边界
+## 6. 当前验收证据
 
 - Task 1：危险工具的风险元数据、不可变动作匹配、一次性批准和 abort 边界有回归测试。
 - Task 2：记忆查询/删除按项目隔离，AgentLoop 获得受限的项目记忆。
 - Task 3：下一轮 mock 行动只在观察到结构化反馈时变化；Core/Server demo 测试通过。
-- Task 4：包入口和 stale chunk 已有测试；用户提供了人工 clean-install、健康页、WebUI 和停止监听成功证据。完整 Windows 自动清理验证没有形成闭合成功证据。
-- Task 5：本地 fake-credential HTTP 生命周期使用隔离文件测试，Server 185 项测试和 Server build 在任务报告中通过。
+- Task 4：自动 clean pack/install/start/health/WebUI/terminate/port-close 生命周期 4/4 通过。
+- Task 5：OS keyring port、配置路由和错误分类均由 fake backend 验证；测试不会接触真实用户凭据。
+- 当前 fresh suite：Core 31 files/297 tests，Server 23 files/197 tests，CLI 4/4；全 workspace typecheck、build、package verifier、静态边界和文档检查通过。
 
 测试数量只在对应任务、命令和日期的证据范围内有效；本规约不把历史总数当作当前全仓保证。
 
@@ -170,7 +171,6 @@ CLI 运行：先构建三个包，再执行 `npm.cmd start --workspace @harness/
 - CLI 自动打开浏览器要求图形桌面；无桌面时手动访问回环地址。
 - 单用户、本地可信模型不提供多租户安全隔离。
 - ResultParser 主要覆盖 Jest/Vitest 风格；其他测试框架需要插件。
-- Task 4 自动化 Windows 安装/清理间隙仍未核验，不能用人工结果替代。
 - 仓库没有已核验的公共完整产品端点；任何发布/托管动作都需要独立安全与运维验证。
 
 ## 8. 问题、用户故事与价值

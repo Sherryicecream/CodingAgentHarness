@@ -67,7 +67,7 @@ CLI 原先依赖 monorepo 布局；Task 4 改为通过 `@harness/server` 的 exp
 
 2026-08-13 的批准设计取代了以下历史加密文件方案：生产代码已删除 `HARNESS_CREDENTIALS_FILE`、主密码和 `credentials.enc`，测试通过注入的 keyring port 或显式禁用原生 keyring，绝不触碰真实用户凭据。自动打包安装生命周期现已闭合。
 
-原计划希望在 tarball verifier 中同时做凭据生命周期。由于 Task 4 已覆盖打包方向且真实默认凭据路径可能触及旧用户文件，Task 5 经协调收窄为本地 source Server 的隔离 HTTP 生命周期，并添加 `HARNESS_CREDENTIALS_FILE` 测试 seam。默认仍是 `~/.harness/credentials.enc`。
+历史 Task 5 曾使用隔离加密文件 seam；该实现已被 2026-08-13 批准的 OS keyring 设计完全删除。当前测试注入 fake keyring，并用 `HARNESS_DISABLE_KEYRING=1` 验证安装包在无 keyring 环境下安全降级，不创建凭据文件。
 
 ## 偏差清单
 
@@ -76,15 +76,18 @@ CLI 原先依赖 monorepo 布局；Task 4 改为通过 `@harness/server` 的 exp
 | 公开入口不运行完整产品（旧说法已否定） | 运行时策略把 public 限制为固定 demo | 文档统一为 local 完整、public 演示 |
 | 指定外部地址可访问 | 当前任务未验证任何地址 | 移除地址与上线保证 |
 | 原生 SQLite driver | package 和实现使用 `sql.js` | SPEC/README 统一为 `sql.js` |
-| Task 4 自动 clean-install 已闭合 | 自动运行超时；人工路径成功 | PLAN 标记部分闭合并保留自动化间隙 |
-| Task 5 必须重复完整 tarball verifier | 协调后改为隔离 credentials seam 与 HTTP lifecycle | 报告说明范围变更，不冒充原计划全部完成 |
+| Task 4 自动 clean-install 已闭合 | 早期运行超时；当前 CLI 生命周期 4/4 | 当前状态已闭合，保留历史偏差说明 |
+| Task 5 使用加密文件 | 已迁移为 OS keyring + memory-only | 删除生产文件 seam，测试只注入 fake port |
 | 旧冷启动记录证明从零复现 | 仓库只有叙述，缺少可独立核验的原始会话证据 | 明确标为历史自述，不作为当前验收 |
 
 ## 本轮没有执行的操作
 
-- 未发布 npm package 或 release。
-- 未推送分支、创建 PR 或修改 master。
-- 未使用真实 API Key 或主密码。
+### 最终分支集成偏差
+
+`finishing-a-development-branch` 在全量验证后提供“本地合并 / 推送并创建 PR / 保留分支”三种选择，学生明确选择本地合并。因此 `codex/final-delivery` 通过 merge commit 合入 `master`，没有为本次收尾创建新 PR。这与课程推荐的“每个 worktree 对应 PR”存在偏差；原因与决策已如实记录，早期功能仍保留其原有分支/PR/commit 历史。本次后续上传不得改写或压平历史。
+
+- 截至本段首次记录时未发布 npm package 或 release；随后由用户明确要求完成 Git 上传。
+- 未将真实 API Key 写入仓库；本地预览只通过系统凭据库读取并返回非秘密认证分类。
 - 未修改 `REFLECTION.md`，也未代写学生反思。
 - 未把旧测试总数、外部操作或无法复现的会话细节包装成事实。
 

@@ -139,8 +139,7 @@ npm.cmd run build
 - PowerShell 执行策略可能阻止 `npm.ps1`；使用 `npm.cmd`。
 - 部分 Agent Shell 命令仍假设类 Unix 命令和路径；需要这些命令时优先使用 Git Bash 或 WSL，并先审查命令。
 - CLI 的自动打开浏览器依赖桌面环境；无图形界面时可手动访问回环地址。
-- Task 4 的用户人工干净安装验证成功：安装增加 90 个包；已安装 CLI/Server/Client 入口存在；`/api/health` 返回 200 且模式为 local；`/` 返回 200；停止后未发现监听进程。
-- 上述人工结果不等于自动化 Windows 清理验证。仓库中的完整 clean-install 自动测试在受限运行中没有形成已闭合、可重复的成功证据；自动化进程清理仍属于未核验间隙。
+- CLI 自动化测试会构建并打包三个 workspace，在临时目录安装 tarball，启动 loopback 服务，验证 health 与 WebUI，终止进程并确认端口关闭。当前结果为 4/4 通过。
 
 ## 安全说明
 
@@ -152,6 +151,8 @@ npm.cmd run build
 ## 文件保留与导出
 
 任务工作区是临时空间。“导出全部产物”会验证本次会话记录的每个文件，并原子写入 `.harness/outputs/<session-id>/`；`manifest.json` 保存路径、大小与 SHA-256，后台回收不会删除导出副本。
+
+完成或失败的会话工作区会保留到 `expiresAt`（默认一小时），供用户导出；到期后后台回收。务必在到期前点击“导出全部产物”。导出完成后副本不再受 session 清理影响。
 
 保存接口为 `POST /api/agent/sessions/:sessionId/save`，请求体为空对象。它导出完整会话清单，并拒绝路径穿越、符号链接、摘要不匹配及覆盖既有导出。`public` 模式不提供持久化。
 
