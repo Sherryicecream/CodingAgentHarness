@@ -34,8 +34,8 @@ it.each([
   );
 
   const alert = await screen.findByRole('alert');
-  expect(alert.textContent).toContain('Unable to load providers');
-  expect(screen.queryByText('No additional providers configured.')).toBeNull();
+  expect(alert.textContent).toContain('无法加载 Provider');
+  expect(screen.queryByText('尚未配置其他 Provider。')).toBeNull();
 });
 
 it('adds, lists, and deletes a provider without retaining its key in the form', async () => {
@@ -67,15 +67,15 @@ it('adds, lists, and deletes a provider without retaining its key in the form', 
   render(<ConfigPage mode="local" />);
 
   await screen.findByText('API Key 状态');
-  await userEvent.type(screen.getByLabelText('Provider ID'), 'fake-compatible');
-  await userEvent.type(screen.getByLabelText('Provider name'), 'Fake Compatible Provider');
-  await userEvent.type(screen.getByLabelText('Base URL'), 'https://provider.invalid/v1');
-  await userEvent.type(screen.getByLabelText('Model'), 'fake-model-v1');
-  await userEvent.type(screen.getByLabelText('Provider API Key'), 'fake-provider-key-sentinel');
-  await userEvent.click(screen.getByRole('button', { name: 'Add provider' }));
+  await userEvent.type(screen.getByLabelText('Provider ID（唯一标识）'), 'fake-compatible');
+  await userEvent.type(screen.getByLabelText('Provider 名称'), 'Fake Compatible Provider');
+  await userEvent.type(screen.getByLabelText('服务地址（Base URL）'), 'https://provider.invalid/v1');
+  await userEvent.type(screen.getByLabelText('模型名称'), 'fake-model-v1');
+  await userEvent.type(screen.getByLabelText('Provider API Key（不会回显）'), 'fake-provider-key-sentinel');
+  await userEvent.click(screen.getByRole('button', { name: '添加 Provider' }));
 
   await screen.findByText('Fake Compatible Provider');
-  expect((screen.getByLabelText('Provider API Key') as HTMLInputElement).value).toBe('');
+  expect((screen.getByLabelText('Provider API Key（不会回显）') as HTMLInputElement).value).toBe('');
   const createCall = fetchSpy.mock.calls.find(([url, init]) => (
     String(url) === '/api/config/providers' && init?.method === 'POST'
   ));
@@ -87,7 +87,7 @@ it('adds, lists, and deletes a provider without retaining its key in the form', 
     apiKey: 'fake-provider-key-sentinel',
   });
 
-  await userEvent.click(screen.getByRole('button', { name: 'Delete Fake Compatible Provider' }));
+  await userEvent.click(screen.getByRole('button', { name: '删除 Fake Compatible Provider' }));
   await waitFor(() => expect(screen.queryByText('Fake Compatible Provider')).toBeNull());
 });
 
@@ -140,10 +140,12 @@ it('keeps advanced provider fields collapsed until the user opens them', async (
     onMessage={vi.fn()}
   />);
 
-  await screen.findByText('No additional providers configured.');
-  expect(screen.getByLabelText('Provider ID').closest('details')?.hasAttribute('open')).toBe(false);
-  await userEvent.click(screen.getByText('Advanced provider settings'));
-  expect(screen.getByLabelText('Provider ID').closest('details')?.hasAttribute('open')).toBe(true);
+  await screen.findByText('尚未配置其他 Provider。');
+  expect(screen.getByText('配置兼容的 Provider。API Key 会加密保存，且不会显示。')).toBeTruthy();
+  expect(screen.getByText('高级 Provider 设置')).toBeTruthy();
+  expect(screen.getByLabelText('Provider ID（唯一标识）').closest('details')?.hasAttribute('open')).toBe(false);
+  await userEvent.click(screen.getByText('高级 Provider 设置'));
+  expect(screen.getByLabelText('Provider ID（唯一标识）').closest('details')?.hasAttribute('open')).toBe(true);
 });
 
 it('does not render provider details while the credential store is locked', async () => {
@@ -156,6 +158,6 @@ it('does not render provider details while the credential store is locked', asyn
 
   render(<ConfigPage mode="local" />);
   await screen.findByLabelText('主密码');
-  expect(screen.queryByText('Providers')).toBeNull();
+  expect(screen.queryByText('Provider 配置')).toBeNull();
   expect(screen.queryByLabelText('Provider API Key')).toBeNull();
 });

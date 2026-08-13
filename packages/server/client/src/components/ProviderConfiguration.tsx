@@ -20,7 +20,7 @@ type ProviderLoadState = 'loading' | 'loaded' | 'error';
 
 const fetchProviders = async (): Promise<ProviderSummary[]> => {
   const response = await fetch('/api/config/providers');
-  if (!response.ok) throw new Error('Unable to load providers');
+  if (!response.ok) throw new Error('无法加载 Provider');
   const body = await response.json() as { providers?: unknown };
   return Array.isArray(body.providers) ? body.providers as ProviderSummary[] : [];
 };
@@ -61,7 +61,7 @@ export function ProviderConfiguration({
 
   const add = async () => {
     if (!id || !name || !baseUrl || !model || !apiKey) {
-      onMessage({ type: 'error', text: 'Complete every provider field' });
+      onMessage({ type: 'error', text: '请填写所有 Provider 字段' });
       return;
     }
     if (needsMasterPassword && (masterPassword.length < 12 || masterPassword.length > 128)) {
@@ -82,20 +82,20 @@ export function ProviderConfiguration({
         }),
       });
       const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error || 'Unable to add provider');
+      if (!response.ok) throw new Error(body.error || '添加 Provider 失败');
       setId('');
       setName('');
       setBaseUrl('');
       setModel('');
       setApiKey('');
       onMasterPasswordChange('');
-      onMessage({ type: 'success', text: 'Provider added' });
+      onMessage({ type: 'success', text: 'Provider 已添加' });
       await refresh();
     } catch (error) {
       setApiKey('');
       onMessage({
         type: 'error',
-        text: error instanceof Error ? error.message : 'Unable to add provider',
+        text: error instanceof Error ? error.message : '添加 Provider 失败',
       });
     }
   };
@@ -105,20 +105,20 @@ export function ProviderConfiguration({
       method: 'DELETE',
     });
     if (!response.ok) {
-      onMessage({ type: 'error', text: 'Unable to delete provider' });
+      onMessage({ type: 'error', text: '删除 Provider 失败' });
       return;
     }
-    onMessage({ type: 'info', text: 'Provider removed' });
+    onMessage({ type: 'info', text: 'Provider 已删除' });
     await refresh();
   };
 
   let providerList: React.ReactNode;
   if (providerLoadState === 'loading') {
-    providerList = <div className="loading-text">Loading providers...</div>;
+    providerList = <div className="loading-text">正在加载 Provider…</div>;
   } else if (providerLoadState === 'error') {
-    providerList = <div role="alert">Unable to load providers.</div>;
+    providerList = <div role="alert">无法加载 Provider。</div>;
   } else if (providers.length === 0) {
-    providerList = <div>No additional providers configured.</div>;
+    providerList = <div>尚未配置其他 Provider。</div>;
   } else {
     providerList = providers.map((provider) => (
       <div key={provider.id} style={{ marginBottom: 12 }}>
@@ -126,31 +126,31 @@ export function ProviderConfiguration({
         <div>{provider.baseUrl} · {provider.model}</div>
         <button
           className="btn btn-danger"
-          aria-label={`Delete ${provider.name}`}
+          aria-label={`删除 ${provider.name}`}
           onClick={() => void remove(provider)}
-        >Delete</button>
+        >删除</button>
       </div>
     ));
   }
 
   return (
     <div className="card" style={{ marginTop: 16 }}>
-      <h3>Providers</h3>
-      <p>Configure additional compatible providers. API keys are stored encrypted and never displayed.</p>
+      <h3>Provider 配置</h3>
+      <p>配置兼容的 Provider。API Key 会加密保存，且不会显示。</p>
       {providerList}
       <details>
-        <summary>Advanced provider settings</summary>
-        <label htmlFor="provider-id">Provider ID</label>
+        <summary>高级 Provider 设置</summary>
+        <label htmlFor="provider-id">Provider ID（唯一标识）</label>
         <input id="provider-id" className="input" value={id} onChange={(event) => setId(event.target.value)} autoComplete="off" />
-        <label htmlFor="provider-name">Provider name</label>
+        <label htmlFor="provider-name">Provider 名称</label>
         <input id="provider-name" className="input" value={name} onChange={(event) => setName(event.target.value)} autoComplete="off" />
-        <label htmlFor="provider-base-url">Base URL</label>
+        <label htmlFor="provider-base-url">服务地址（Base URL）</label>
         <input id="provider-base-url" className="input" type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} autoComplete="off" />
-        <label htmlFor="provider-model">Model</label>
+        <label htmlFor="provider-model">模型名称</label>
         <input id="provider-model" className="input" value={model} onChange={(event) => setModel(event.target.value)} autoComplete="off" />
-        <label htmlFor="provider-api-key">Provider API Key</label>
+        <label htmlFor="provider-api-key">Provider API Key（不会回显）</label>
         <input id="provider-api-key" className="input" type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" />
-        <button className="btn btn-primary" onClick={() => void add()}>Add provider</button>
+        <button className="btn btn-primary" onClick={() => void add()}>添加 Provider</button>
       </details>
     </div>
   );
