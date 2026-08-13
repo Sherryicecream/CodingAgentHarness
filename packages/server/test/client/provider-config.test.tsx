@@ -86,6 +86,6 @@ it('requires matching confirmation before saving a new master password', async (
   const confirmation = screen.getByLabelText(/确认主密码/);
   await userEvent.type(confirmation, 'different password');
   await userEvent.click(screen.getByRole('button', { name: '保存 DeepSeek API Key' }));
-  expect(screen.getByRole('status')).toHaveTextContent(/主密码不一致/);
+  expect(screen.getByRole('status').textContent).toMatch(/主密码不一致/);
   expect(fetchSpy).not.toHaveBeenCalledWith('/api/config/key', expect.anything());
 });
