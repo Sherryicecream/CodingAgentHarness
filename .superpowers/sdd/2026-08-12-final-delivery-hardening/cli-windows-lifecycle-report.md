@@ -75,3 +75,53 @@ Final read-only inspection found no Node command line containing `harness-instal
 ## Concerns
 
 The packed integration is a real npm install and therefore still requires either a sufficiently populated local npm cache or registry access for public transitive dependencies. `npm_config_prefer_offline=true` minimizes that dependency without turning the test into a mock. The regression uses random ports in 31000-31999, so the small pre-bind race documented in Task 8 remains unchanged.
+
+## Review fix: observable natural shutdown and isolated cleanup
+
+Review found that the first fix's test cleanup could hide the exact orphan it claimed to detect: it called `child.kill()` and immediately ran `taskkill /t /f`, so a descendant server could be forcibly removed before the port-close assertion. It also skipped directory removal if lifecycle cleanup threw, and the installed CLI inherited credential-bearing environment variables while using the real default credential location.
+
+### RED
+
+A controlled Windows fixture launched a CLI-like wrapper with a descendant loopback HTTP server and asserted that normal wrapper termination must reject while the descendant remained listening:
+
+```text
+node --test --test-name-pattern "Windows cleanup reports" test/installed-runtime.test.mjs
+```
+
+Against immediate `taskkill`, exit was `1` in 1.2 seconds: 0/1 passed. The exact failure was `AssertionError: Missing expected rejection` because forced tree termination erased the listener before the assertion. After the natural-exit implementation, the fixture was made explicitly detached so Windows consistently preserved the intended orphan; the focused test then passed and its own finalizer removed the fixture server.
+
+A second focused RED injected only the fake sentinel `sk-fake-parent-environment-regression-only` into the would-be inherited CLI environment. The packed test exited `1` in 21.9 seconds because `/api/config/status` returned:
+
+```text
+{ hasKey: true, source: 'env', state: 'empty' }
+```
+
+instead of the required fake-only empty state.
+
+### GREEN and refactor
+
+- `stopProcessTree` now sends normal termination, waits for the actual child exit, then requires three consecutive failed loopback requests before accepting port closure.
+- Only a timeout/error triggers best-effort `taskkill /t /f` (or `SIGKILL` off Windows), after which the original lifecycle error is rethrown.
+- `cleanupPackedRuntime` records lifecycle failure, always runs both directory removals with `Promise.allSettled`, and returns cleanup failure without replacing an earlier test-body failure.
+- The controlled orphan regression verifies both the lifecycle rejection and removal of its packed/install directories.
+- The packed child filters inherited names containing API/access keys, tokens, secrets, passwords, credentials, or authorization, and pins `HARNESS_CREDENTIALS_FILE` below `installDirectory`. Its fake inherited sentinel is absent from `/api/config/status`, and the temporary credential file remains absent.
+
+Focused command:
+
+```text
+node --test --test-name-pattern "Windows cleanup reports|packed CLI node entry" test/installed-runtime.test.mjs
+```
+
+Exit `0` in 54.8 seconds: 2/2 passed. The real packed install accounted for 52.1 seconds on that run; the subsequent cached full suite was faster.
+
+Fresh final verification:
+
+| Command | Exit/result |
+| --- | --- |
+| `npm.cmd test --workspace @harness/cli` | `0`; 4/4 passed; 19.6 s |
+| `npm.cmd run build` | `0`; CLI, Core JS/DTS, Server JS and Vite client built |
+| `npm.cmd run verify:packages` | `0`; Core 3, Server 9, CLI 2 files; entries verified |
+| `npm.cmd test --workspace @harness/server -- test/app.test.ts test/security/runtime-policy.test.ts` | `0`; 2 files, 7/7 passed |
+| `git diff --check 6c38022` | `0` |
+
+Final inspection found no matching Node process, listener on ports 31000-31999, or recent `harness-installed-*`, `harness-packed-*`, or `harness-orphan-*` temp directory. `artifacts/` remained untouched. No real credential, `REFLECTION.md`, external operation, push, PR, publication, or release was used.

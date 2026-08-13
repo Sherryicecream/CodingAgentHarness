@@ -12,6 +12,11 @@ const npmCli = process.env.npm_execpath
     ? join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
     : undefined);
 const serverDirectory = join(repositoryRoot, 'packages', 'server');
+const credentialEnvironmentName = /(?:api[_-]?key|access[_-]?key|token|secret|password|credential|authorization)/i;
+
+const withoutCredentialEnvironment = (environment) => Object.fromEntries(
+  Object.entries(environment).filter(([name]) => !credentialEnvironmentName.test(name)),
+);
 
 const runNpm = (args, options = {}) => {
   const command = npmCli ? process.execPath : 'npm';
@@ -42,30 +47,126 @@ const waitForResponse = async (url, child, output, path = '/') => {
   throw new Error(`harness did not answer at ${url}${path}\n${output()}\n${lastError}`);
 };
 
-const waitForPortToClose = async (url) => {
-  const deadline = Date.now() + 10_000;
+const waitForPortToClose = async (url, timeoutMs = 10_000) => {
+  const deadline = Date.now() + timeoutMs;
+  let consecutiveFailures = 0;
   while (Date.now() < deadline) {
     try {
       await fetch(`${url}/api/health`);
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+      consecutiveFailures = 0;
     } catch {
-      return;
+      consecutiveFailures += 1;
+      if (consecutiveFailures === 3) {
+        return;
+      }
     }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
   }
   throw new Error(`server continued listening after CLI shutdown: ${url}`);
 };
 
-const stopProcessTree = async (child, url) => {
+const waitForExit = (child, timeoutMs) => new Promise((resolveExit, rejectExit) => {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    resolveExit();
+    return;
+  }
+  const timeout = setTimeout(() => {
+    rejectExit(new Error(`CLI did not exit after termination: ${child.pid}`));
+  }, timeoutMs);
+  child.once('exit', () => {
+    clearTimeout(timeout);
+    resolveExit();
+  });
+  child.once('error', (error) => {
+    clearTimeout(timeout);
+    rejectExit(error);
+  });
+});
+
+const stopProcessTree = async (child, url, timeoutMs = 10_000) => {
   if (!child || child.exitCode !== null) {
-    await waitForPortToClose(url);
+    await waitForPortToClose(url, timeoutMs);
     return;
   }
   child.kill();
-  if (process.platform === 'win32') {
-    spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore' });
+  try {
+    await waitForExit(child, timeoutMs);
+    await waitForPortToClose(url, timeoutMs);
+  } catch (lifecycleError) {
+    if (process.platform === 'win32') {
+      spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore' });
+    } else {
+      child.kill('SIGKILL');
+    }
+    throw lifecycleError;
   }
-  await waitForPortToClose(url);
 };
+
+const cleanupPackedRuntime = async (child, url, directories, timeoutMs = 10_000) => {
+  let failure;
+  if (url) {
+    try {
+      await stopProcessTree(child, url, timeoutMs);
+    } catch (error) {
+      failure = error;
+    }
+  }
+  const removalResults = await Promise.allSettled(
+    directories.map((directory) => rm(directory, { recursive: true, force: true })),
+  );
+  if (!failure) {
+    failure = removalResults.find((result) => result.status === 'rejected')?.reason;
+  }
+  return failure;
+};
+
+test('Windows cleanup reports a descendant server left listening after normal CLI termination', {
+  skip: process.platform !== 'win32',
+  timeout: 30_000,
+}, async () => {
+  const port = 31_000 + Math.floor(Math.random() * 1_000);
+  const url = `http://127.0.0.1:${port}`;
+  const packedDirectory = await mkdtemp(join(tmpdir(), 'harness-orphan-packed-'));
+  const installDirectory = await mkdtemp(join(tmpdir(), 'harness-orphan-installed-'));
+  const serverScript = [
+    "const { createServer } = require('node:http');",
+    "createServer((_request, response) => response.end('ok')).listen(Number(process.env.PORT), '127.0.0.1');",
+  ].join('');
+  const wrapperScript = [
+    "const { spawn } = require('node:child_process');",
+    "const server = spawn(process.execPath, ['-e', process.env.SERVER_SCRIPT], { detached: true, env: process.env, stdio: 'ignore' });",
+    'console.log(server.pid);',
+    'setInterval(() => undefined, 1_000);',
+  ].join('');
+  const wrapper = spawn(process.execPath, ['-e', wrapperScript], {
+    env: { ...process.env, PORT: String(port), SERVER_SCRIPT: serverScript },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  wrapper.stdout.on('data', (chunk) => { output += chunk.toString(); });
+  wrapper.stderr.on('data', (chunk) => { output += chunk.toString(); });
+  let serverPid;
+  try {
+    await waitForResponse(url, wrapper, () => output);
+    serverPid = Number(output.trim().split(/\s+/)[0]);
+    assert.ok(Number.isSafeInteger(serverPid) && serverPid > 0, output);
+    const cleanupFailure = await cleanupPackedRuntime(
+      wrapper,
+      url,
+      [packedDirectory, installDirectory],
+      1_000,
+    );
+    assert.match(cleanupFailure?.message ?? '', new RegExp(`server continued listening after CLI shutdown: ${url}`));
+    await assert.rejects(readFile(packedDirectory), { code: 'ENOENT' });
+    await assert.rejects(readFile(installDirectory), { code: 'ENOENT' });
+  } finally {
+    wrapper.kill();
+    if (serverPid) {
+      spawnSync('taskkill', ['/pid', String(serverPid), '/t', '/f'], { stdio: 'ignore' });
+    }
+    await waitForPortToClose(url);
+  }
+});
 
 test('server build removes stale chunks before they can be packed', { timeout: 30_000 }, async () => {
   const cacheDirectory = await mkdtemp(join(tmpdir(), 'harness-pack-cache-'));
@@ -96,6 +197,7 @@ test('CLI bin metadata names a Node entry rather than a Windows command wrapper'
 test('packed CLI node entry serves health JSON and the packaged Web UI', { timeout: 60_000 }, async () => {
   const packedDirectory = await mkdtemp(join(tmpdir(), 'harness-packed-'));
   const installDirectory = await mkdtemp(join(tmpdir(), 'harness-installed-'));
+  const credentialsFile = join(installDirectory, 'credentials', 'credentials.enc');
   const npmEnvironment = {
     ...process.env,
     npm_config_audit: 'false',
@@ -103,6 +205,7 @@ test('packed CLI node entry serves health JSON and the packaged Web UI', { timeo
   };
   let child;
   let expectedUrl;
+  let testFailure;
   try {
     runNpm(['run', 'build', '--workspace', '@harness/core']);
     runNpm(['run', 'build', '--workspace', '@harness/server']);
@@ -137,9 +240,18 @@ test('packed CLI node entry serves health JSON and the packaged Web UI', { timeo
       'cli',
       installedCliPackage.bin.harness,
     );
+    const inheritedEnvironment = {
+      ...process.env,
+      DEEPSEEK_API_KEY: 'sk-fake-parent-environment-regression-only',
+    };
     child = spawn(process.execPath, [cliEntry], {
       cwd: installDirectory,
-      env: { ...process.env, HOST: '127.0.0.1', PORT: String(port) },
+      env: {
+        ...withoutCredentialEnvironment(inheritedEnvironment),
+        HARNESS_CREDENTIALS_FILE: credentialsFile,
+        HOST: '127.0.0.1',
+        PORT: String(port),
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
@@ -151,16 +263,26 @@ test('packed CLI node entry serves health JSON and the packaged Web UI', { timeo
     const healthResponse = await fetch(`${expectedUrl}/api/health`);
     assert.equal(healthResponse.status, 200);
     assert.deepEqual(await healthResponse.json(), { status: 'ok', mode: 'local' });
+    const configResponse = await fetch(`${expectedUrl}/api/config/status`);
+    assert.equal(configResponse.status, 200);
+    assert.deepEqual(await configResponse.json(), { hasKey: false, source: 'none', state: 'empty' });
+    await assert.rejects(readFile(credentialsFile), { code: 'ENOENT' });
     const webUiResponse = await fetch(expectedUrl);
     assert.equal(webUiResponse.status, 200);
     assert.match(await webUiResponse.text(), /<div id="root"><\/div>/);
+  } catch (error) {
+    testFailure = error;
   } finally {
-    if (expectedUrl) {
-      await stopProcessTree(child, expectedUrl);
+    const cleanupFailure = await cleanupPackedRuntime(
+      child,
+      expectedUrl,
+      [packedDirectory, installDirectory],
+    );
+    if (testFailure) {
+      throw testFailure;
     }
-    await Promise.all([
-      rm(packedDirectory, { recursive: true, force: true }),
-      rm(installDirectory, { recursive: true, force: true }),
-    ]);
+    if (cleanupFailure) {
+      throw cleanupFailure;
+    }
   }
 });
