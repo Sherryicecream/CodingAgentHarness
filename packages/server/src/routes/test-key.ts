@@ -11,12 +11,15 @@ export const handleTestKey = async (
   _req: Request,
   res: Response,
 ): Promise<void> => {
-  const apiKey = dependencies.credentialStore.getKey('harness/deepseek-api-key');
+  const apiKey = dependencies.credentialStore.getKey('harness/deepseek-api-key')
+    ?? process.env.DEEPSEEK_API_KEY;
   if (!apiKey) {
     res.json({ valid: false, error: 'API_KEY_NOT_CONFIGURED' });
     return;
   }
-  const response = await (dependencies.fetchImpl ?? fetch)(
+  let response: Response;
+  try {
+    response = await (dependencies.fetchImpl ?? fetch)(
     `${process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'}/v1/chat/completions`,
     {
       method: 'POST',
@@ -30,7 +33,11 @@ export const handleTestKey = async (
         max_tokens: 5,
       }),
     },
-  );
+    );
+  } catch {
+    res.json({ valid: false, error: 'API_CONNECTION_FAILED' });
+    return;
+  }
   res.json(response.ok
     ? { valid: true }
     : { valid: false, error: `API returned ${response.status}` });
