@@ -45,7 +45,7 @@
 | 5 | OS keyring、memory-only Key、配置状态和认证分类；`credential-keyring.ts`、`credential-store.ts`、`routes/config.ts`、`routes/test-key.ts`、`ConfigPage.tsx` | credential/config/test-key tests；401/402/429/5xx/连接失败分类 | Task 4、本地模式 | `e6796a3`, `badd838` | 完成 |
 | 6 | 会话产物追踪、SHA-256 manifest、原子导出；`session/artifact-tracker.ts`、`artifact-exporter.ts`、`workspace-manager.ts` | artifact/workspace tests，拒绝穿越、链接、摘要变化和覆盖 | Server session、Task 1 | `e6796a3`, `dc7d52e` | 完成 |
 | 7 | 项目变更预览、摘要绑定和单次批准；`session/project-change-applier.ts`、agent routes/UI | `project-change-applier.test.ts` 与 route/UI tests | Task 6 | `921ba04` | 完成 |
-| 8 | 无 Key 静态机制演示和 Pages workflow；static Vite entry、`.github/workflows/ci.yml` | static build、`verify-static-boundary`、public demo tests | Task 3；发布依赖 unit-test | `921ba04`, `d578edc` | 完成：最新 CI #66 两个 job 成功，Pages 根页面与 JS/CSS 均已实测 200 |
+| 8 | 无 Key 静态机制演示和 Pages workflow；static Vite entry、`.github/workflows/ci.yml` | static build、`verify-static-boundary`、public demo tests | Task 3；发布依赖 unit-test | `921ba04`, `d578edc` | 完成：已记录成功 CI，Pages 根页面与 JS/CSS 均已实测 200 |
 | 9 | AI4SE 文档、最终验证和分发；根目录交付文档、CI、package verifier | `test:docs`、`check:docs`、typecheck、test、build、package、audit | Tasks 1–8 | `874f29f`, `192294e`, `487e5ed`, `99d7906` | 完成：Reflection 正文合规，Pages 与 `v0.1.0` Release 均已公开验收 |
 
 ## 4. 依赖与可并行关系
@@ -77,7 +77,7 @@ Tasks 1–3 的内部修复存在共享 Core 状态，按顺序完成；Task 5�
 - 生产依赖 audit：0 个已知漏洞。
 - 实际本地 Server：health 200、WebUI 200；本机 OS keyring 状态为可用但未保存 Key。
 - CLI Windows 自动生命周期：修复测试 fixture 精确 PID 清理后，当前 4/4 通过；packed CLI 验证 health、配置状态、WebUI 与端口回收。
-- 最新远端 GitHub Actions CI #66（run `31708083604`）：`unit-test` 与 `deploy-static-demo` 均成功；Pages 静态机制演示 `sherryicecream.github.io/CodingAgentHarness/` 的根页面、JavaScript 与 CSS 均实测 HTTP 200。真实可点击 URL 记录在 `AI4SE_DELIVERY_CHECKLIST.md`。
+- Release 文档更新前的 GitHub Actions CI #66（run `31708083604`）：`unit-test` 与 `deploy-static-demo` 均成功；后续文档提交的 CI 也按相同门槛独立核验。Pages 静态机制演示 `sherryicecream.github.io/CodingAgentHarness/` 的根页面、JavaScript 与 CSS 均实测 HTTP 200。真实可点击 URL 记录在 `AI4SE_DELIVERY_CHECKLIST.md`。
 - GitHub Release `v0.1.0`（Release ID `369970882`）已公开：annotated tag 指向 `99d7906`，三个 tarball 与 `SHA256SUMS.txt` 均从公开下载路径实测 HTTP 200，文件大小和 SHA-256 与本地验证制品一致。
 
 ## 6. 最终复核命令

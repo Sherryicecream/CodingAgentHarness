@@ -51,7 +51,7 @@ npm.cmd audit --omit=dev
 
 ## 上传后核验与剩余事项
 
-- 最新 GitHub Actions CI #66 的 `unit-test` 与 `deploy-static-demo` 均为 pass。
+- Release 文档更新前的 GitHub Actions CI #66 以及其后的最终文档 CI 均通过 `unit-test` 与 `deploy-static-demo`；提交时应以 Actions 页面最上方运行结果为准。
 - GitHub Pages 根页面、JavaScript 与 CSS 已从公开 URL 实测 HTTP 200。
 - [Core 0.1.0](https://github.com/Sherryicecream/CodingAgentHarness/releases/download/v0.1.0/harness-core-0.1.0.tgz)、[Server 0.1.0](https://github.com/Sherryicecream/CodingAgentHarness/releases/download/v0.1.0/harness-server-0.1.0.tgz)、[CLI 0.1.0](https://github.com/Sherryicecream/CodingAgentHarness/releases/download/v0.1.0/harness-cli-0.1.0.tgz) 与 [SHA256SUMS.txt](https://github.com/Sherryicecream/CodingAgentHarness/releases/download/v0.1.0/SHA256SUMS.txt) 均已公开下载并核对大小。
 - 若课程平台以 NJU Git 仓库为唯一提交入口，应确认 GitHub 与课程仓库的最终 commit 一致。
