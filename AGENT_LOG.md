@@ -173,6 +173,16 @@
 - **验证边界**：公开 CI badge 为 passing；Pages URL 是否可访问仍取决于仓库 Pages 外部开关，不能由代码单独保证。
 - **教训**：本地构建缓存会制造假绿；CI 分支触发与 job 条件必须成对检查。
 
+## 2026-08-13 — Windows packed CLI、Pages 根入口与 v0.1.0 Release
+
+- **Windows CLI 复现**：用户普通 PowerShell 首次报告 cleanup 与 packed runtime 两项失败；`3ceb545` 修复 detached fixture 精确 PID 清理。随后 packed install 连续两次在 50/60 秒边界超时，分阶段对照显示空 npm cache 安装用时 17.9 秒、默认 cache 3.5 秒；`3f60374` 保留全新安装目录但复用 npm 完整性校验 cache，focused、CLI 4/4 与全仓测试恢复 GREEN。
+- **Pages 根入口**：CI #64 虽成功部署，但根路径 404、`static-demo.html` 为 200。`d578edc` 通过 Vite/Rolldown post bundle hook 只修改 HTML asset 的 `fileName`，并让 boundary verifier 强制检查 `index.html`、旧入口和相对资源。CI #65 与 #66 均成功，根页面、JavaScript 和 CSS 均实测 200。
+- **过程方法**：Pages 修复先观察 verifier RED；两次未成功 GREEN 分别暴露 Vite HTML hook 顺序和 Rolldown 禁止重写 bundle 键，最终采用只修改已有 asset 的最小实现。设计、计划、TDD 证据和五轴 review 分别记录在 `docs/superpowers/`。
+- **Release**：annotated tag `v0.1.0` 指向 `99d7906`；Release ID `369970882`。三个确切 tarball 在全新临时目录安装，Core/Server import、CLI health/WebUI/端口回收通过；SHA-256 复算一致且未发现真实 Key、私钥、本机路径或会话数据。
+- **发布控制**：先创建 Draft，再上传并核对四个附件名称、状态和大小，集合完整后才公开。首次查询因预期 404 安全停止；第二次因 PowerShell 扩展字符串属性导致 GitHub 422，在 Draft 创建前停止；改用纯 .NET 字符串后成功公开。Release 页面和四个无需认证的下载地址均返回 200。
+- **人工批准**：用户逐步批准 CLI 调查与修复、Pages 设计/执行/提交/推送，以及 Release 准备和正式发布；没有自动扩大远端写操作范围。
+- **教训**：workflow 成功不等于入口可访问；Release 成功不等于附件完整。必须分别验证部署根路径、资源 URL、tag 指向、Draft 附件集合和公开下载结果。
+
 ## 全流程方法偏差汇总
 
 1. 冷启动在主体实现后补做，而非实现前。
@@ -188,3 +198,4 @@
 - 长期文件保存到项目 `.harness/outputs/`；`.harness-workspaces` 是隔离临时区。
 - 当前验证基线记录为 Core 31 files/297 tests、Server 23 files/197 tests、CLI lifecycle 4/4；这些数字必须与对应 commit/运行日期一起解释。
 - `REFLECTION.md` 属于学生本人材料，本轮没有代写或修改。
+- GitHub Pages 静态演示与 `v0.1.0` Release 已公开验收；真实链接集中记录在 `AI4SE_DELIVERY_CHECKLIST.md`。

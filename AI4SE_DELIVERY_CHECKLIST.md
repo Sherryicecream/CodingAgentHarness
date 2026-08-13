@@ -15,9 +15,9 @@
 | 声明式配置 | `packages/core/src/config/` | config tests | 完成 |
 | 凭据安全存储 | `credential-keyring.ts` + memory-only BYOK | Server tests；状态不回显 | 完成 |
 | 首次录入/状态/更新/清除 | 本地 ConfigPage + config routes | credential/route tests | 完成 |
-| 分发 | Core/Server/CLI npm tarball | `verify:packages` 与 Windows CLI 4/4 通过；真实 Release 附件待发布 | **部分完成** |
+| 分发 | Core/Server/CLI npm tarball | `verify:packages`、Windows CLI 4/4、[v0.1.0 Release](https://github.com/Sherryicecream/CodingAgentHarness/releases/tag/v0.1.0) | 完成：三个 tarball 与校验清单均公开验收 |
 | 本地完整 WebUI | loopback Express + React | clean installed CLI lifecycle | 完成 |
-| 线上 WebUI | serverless static mechanism demo | static build/boundary + [CI #65](https://github.com/Sherryicecream/CodingAgentHarness/actions/runs/31707282460) | 完成：[Pages 根页面](https://sherryicecream.github.io/CodingAgentHarness/)与 JS/CSS 均实测 200 |
+| 线上 WebUI | serverless static mechanism demo | static build/boundary + [CI #66](https://github.com/Sherryicecream/CodingAgentHarness/actions/runs/31708083604) | 完成：[Pages 根页面](https://sherryicecream.github.io/CodingAgentHarness/)与 JS/CSS 均实测 200 |
 | Mock 机制演示 | Core/Server demo + static timeline | deterministic tests | 完成 |
 
 ## 课程文档
@@ -28,7 +28,7 @@
 | `PLAN.md` | 原始 62-task 计划、加固 task、依赖/并行、验证、提交与当前状态 | 完成；原始全文归档并与当前状态分层 |
 | `SPEC_PROCESS.md` | brainstorming、关键迭代、冷启动与偏差 | 完成 |
 | `AGENT_LOG.md` | 技能、任务、提交、人工干预、验证与教训 | 完成 |
-| `README.md` | 简介、安装、运行、分发、目录、安全、凭据、导出、限制、第三方许可证 | **部分完成：许可证与已验证安装命令已补，待真实 Release 地址** |
+| `README.md` | 简介、安装、运行、分发、目录、安全、凭据、导出、限制、第三方许可证 | 完成：许可证、安装命令、`v0.1.0` 文件名和 SHA-256 已记录 |
 | `.gitlab-ci.yml` | 名为 `unit-test` 的 job | 完成 |
 | `.github/workflows/ci.yml` | push 测试、构建、package、docs、static Pages | 完成 |
 | `REFLECTION.md` | 1500–2500 字，学生本人撰写 | 学生已修订；正文约 2491 个汉字（不含标题与姓名），已确认合规 |
@@ -51,8 +51,8 @@ npm.cmd audit --omit=dev
 
 ## 上传后核验与剩余事项
 
-- GitHub Actions CI #65 的 `unit-test` 与 `deploy-static-demo` 均为 pass。
+- 最新 GitHub Actions CI #66 的 `unit-test` 与 `deploy-static-demo` 均为 pass。
 - GitHub Pages 根页面、JavaScript 与 CSS 已从公开 URL 实测 HTTP 200。
-- 创建真实 GitHub Release、上传三个已验证 tarball，并在 README 记录真实附件地址。
+- [Core 0.1.0](https://github.com/Sherryicecream/CodingAgentHarness/releases/download/v0.1.0/harness-core-0.1.0.tgz)、[Server 0.1.0](https://github.com/Sherryicecream/CodingAgentHarness/releases/download/v0.1.0/harness-server-0.1.0.tgz)、[CLI 0.1.0](https://github.com/Sherryicecream/CodingAgentHarness/releases/download/v0.1.0/harness-cli-0.1.0.tgz) 与 [SHA256SUMS.txt](https://github.com/Sherryicecream/CodingAgentHarness/releases/download/v0.1.0/SHA256SUMS.txt) 均已公开下载并核对大小。
 - 若课程平台以 NJU Git 仓库为唯一提交入口，应确认 GitHub 与课程仓库的最终 commit 一致。
 - 不上传 `.harness/`、临时 workspace、真实 Key、日志或生成的示例文件。

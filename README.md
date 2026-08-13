@@ -56,7 +56,7 @@ CLI 是本地服务器启动器；它解析已安装的 `@harness/server` 包并
 
 ## 分发
 
-项目选择 npm 包/CLI 分发。发布前用 `npm.cmd run verify:packages` 验证 Core、Server、CLI tarball 入口；正式 Release URL 只在实际发布后补充。目标机器需要 Node.js 22，持久 Key 依赖 Windows Credential Manager、macOS Keychain 或 Linux Secret Service；Linux 无 Secret Service 时使用“仅本次使用”。
+项目选择 GitHub Release 附件形式的 npm 包/CLI 分发。`v0.1.0` 已发布，并在发布前用 `npm.cmd run verify:packages` 验证 Core、Server、CLI tarball 入口。真实可点击的 Release 与附件地址记录在 `AI4SE_DELIVERY_CHECKLIST.md`；目标机器需要 Node.js 22，持久 Key 依赖 Windows Credential Manager、macOS Keychain 或 Linux Secret Service；Linux 无 Secret Service 时使用“仅本次使用”。这些附件没有发布到 npm registry，因此不要把 `npm install -g @harness/cli` 当作可用安装方式。
 
 从仓库构建并运行：
 
@@ -69,7 +69,7 @@ $env:HOST = "127.0.0.1"
 npm.cmd start --workspace @harness/cli
 ```
 
-当前 `0.1.0` 构建会生成 `harness-core-0.1.0.tgz`、`harness-server-0.1.0.tgz` 和 `harness-cli-0.1.0.tgz`。正式发布后，从该仓库的 GitHub Releases 页面进入明确标注的 release，下载同一版本的三个附件；不要根据包名猜测附件 URL，也不要把 `npm install -g @harness/cli` 当作已经发布的保证。
+从交付检查表进入 `Coding Agent Harness v0.1.0` Release，下载 `harness-core-0.1.0.tgz`、`harness-server-0.1.0.tgz`、`harness-cli-0.1.0.tgz` 和 `SHA256SUMS.txt`。三个包必须来自同一 Release；安装前用清单核验 SHA-256，不要根据包名猜测地址。
 
 把三个附件放入同一空目录后，可进行本地安装：
 
@@ -82,7 +82,15 @@ $env:NODE_ENV = "production"
 .\node_modules\.bin\harness.cmd
 ```
 
-macOS/Linux 使用 `npm`，最后一行改为 `./node_modules/.bin/harness`。该安装命令已在临时空目录验证：npm 安装 92 个包，三个包入口与 `harness` bin 均存在。当前仓库尚未创建正式 Release，因此暂不记录下载链接；发布后必须把真实 release/tag/附件地址补到本节。
+macOS/Linux 使用 `npm`，最后一行改为 `./node_modules/.bin/harness`。发布的三个确切附件已在临时空目录验证：npm 安装 92 个包且审计为 0 个漏洞，Core/Server import 成功，`harness` bin、health 和 WebUI 均通过，结束后端口正常回收。公开下载文件的大小与本地 staging 制品逐一一致。
+
+`v0.1.0` SHA-256：
+
+```text
+daec6184fccfc866b385bed47b3801484602dfd0083d026111f187b279905cc9  harness-cli-0.1.0.tgz
+b7295811e53a2c99a18d10b3c2e8d94da6dc4edbf468ee2b2ccbab156995a9c4  harness-core-0.1.0.tgz
+65736a3b8404adabb01611eb4862de28aaddfab343acdd177e682d16c06426ce  harness-server-0.1.0.tgz
+```
 
 ## 确定性公开演示
 
