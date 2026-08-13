@@ -164,11 +164,11 @@ Expected: `packages/server/safe-example.ts` remains untracked and is not staged.
 - Consumes: the pushed fix commit and GitHub Actions Pages deployment output.
 - Produces: a public root URL returning the static Harness demo and truthful final-delivery status documentation.
 
-- [ ] **Step 1: Request push approval and push the fix**
+- [x] **Step 1: Request push approval and push the fix**
 
 After explicit human approval, push the local commits to `origin/master`. Do not create a Release in this step.
 
-- [ ] **Step 2: Verify both remote jobs**
+- [x] **Step 2: Verify both remote jobs**
 
 Open the workflow run associated with the fix commit and verify separately:
 
@@ -176,7 +176,7 @@ Open the workflow run associated with the fix commit and verify separately:
 - `deploy-static-demo`: success;
 - total workflow conclusion: success.
 
-- [ ] **Step 3: Verify the deployed page contract**
+- [x] **Step 3: Verify the deployed page contract**
 
 Request `https://sherryicecream.github.io/CodingAgentHarness/` and require:
 
@@ -186,11 +186,11 @@ Request `https://sherryicecream.github.io/CodingAgentHarness/` and require:
 - relative `/CodingAgentHarness/assets/` or `./assets/` resource references;
 - referenced JavaScript and CSS URLs each return HTTP 200.
 
-- [ ] **Step 4: Update delivery evidence only after Step 3 passes**
+- [x] **Step 4: Update delivery evidence only after Step 3 passes**
 
 In `AI4SE_DELIVERY_CHECKLIST.md` and `PLAN.md`, replace the pending Pages wording with the exact successful workflow run and verified root URL. Do not claim that the static demo exposes the local API, credentials, or full product.
 
-- [ ] **Step 5: Verify, review, and request documentation commit approval**
+- [x] **Step 5: Verify, review, and request documentation commit approval**
 
 Run:
 

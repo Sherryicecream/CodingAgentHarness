@@ -17,7 +17,7 @@
 | 首次录入/状态/更新/清除 | 本地 ConfigPage + config routes | credential/route tests | 完成 |
 | 分发 | Core/Server/CLI npm tarball | `verify:packages` 与 Windows CLI 4/4 通过；真实 Release 附件待发布 | **部分完成** |
 | 本地完整 WebUI | loopback Express + React | clean installed CLI lifecycle | 完成 |
-| 线上 WebUI | serverless static mechanism demo | static build/boundary | 代码完成，待远端 Pages 成功 |
+| 线上 WebUI | serverless static mechanism demo | static build/boundary + [CI #65](https://github.com/Sherryicecream/CodingAgentHarness/actions/runs/31707282460) | 完成：[Pages 根页面](https://sherryicecream.github.io/CodingAgentHarness/)与 JS/CSS 均实测 200 |
 | Mock 机制演示 | Core/Server demo + static timeline | deterministic tests | 完成 |
 
 ## 课程文档
@@ -49,10 +49,10 @@ npm.cmd audit --omit=dev
 
 当前本地证据：Core 297/297、Server 197/197、Windows CLI 4/4；生产依赖审计 0 个已知漏洞。
 
-## 上传后必须核验
+## 上传后核验与剩余事项
 
-- GitHub/GitLab 最后一次 `unit-test`/CI 为 pass。
-- GitHub Pages workflow 成功，并记录真实可访问 URL；不要预先填写猜测地址。
+- GitHub Actions CI #65 的 `unit-test` 与 `deploy-static-demo` 均为 pass。
+- GitHub Pages 根页面、JavaScript 与 CSS 已从公开 URL 实测 HTTP 200。
 - 创建真实 GitHub Release、上传三个已验证 tarball，并在 README 记录真实附件地址。
 - 若课程平台以 NJU Git 仓库为唯一提交入口，应确认 GitHub 与课程仓库的最终 commit 一致。
 - 不上传 `.harness/`、临时 workspace、真实 Key、日志或生成的示例文件。
