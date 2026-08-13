@@ -1,14 +1,36 @@
 import { Tool, ToolResult } from '../types.js';
 import { exec, spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { win32 } from 'node:path';
 
-const terminateWindowsProcessTree = (pid: number): Promise<void> => new Promise((resolve, reject) => {
-  const taskkill = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
-    windowsHide: true,
-    stdio: 'ignore',
+export const terminateWindowsProcessTree = async (
+  pid: number,
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): Promise<void> => {
+  const systemRoot = environment.SystemRoot;
+  if (!systemRoot || !win32.isAbsolute(systemRoot)) {
+    throw new Error('Windows SystemRoot must be an absolute path');
+  }
+  const taskkillPath = win32.join(systemRoot, 'System32', 'taskkill.exe');
+  if (!existsSync(taskkillPath)) {
+    throw new Error(`Windows taskkill executable was not found under SystemRoot: ${taskkillPath}`);
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const taskkill = spawn(taskkillPath, ['/PID', String(pid), '/T', '/F'], {
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+    taskkill.once('error', reject);
+    taskkill.once('close', (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`taskkill exited with code ${String(code)}`));
+      }
+    });
   });
-  taskkill.once('error', reject);
-  taskkill.once('close', () => resolve());
-});
+};
 
 export function createExecuteShellTool(
   workspaceRoot: string,

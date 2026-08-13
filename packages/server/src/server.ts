@@ -22,6 +22,12 @@ export const startServer = async (): Promise<HarnessApp> => {
   const host = process.env.HOST || '127.0.0.1';
   await new Promise<void>((resolveListening, rejectListening) => {
     let server: ReturnType<typeof app.listen>;
+    const rejectAfterClose = (error: unknown): void => {
+      void app.close().then(
+        () => rejectListening(error),
+        () => rejectListening(error),
+      );
+    };
     const onListening = (): void => {
       server.removeListener('error', onError);
       console.log(`Harness server started: http://${host}:${port}`);
@@ -29,12 +35,14 @@ export const startServer = async (): Promise<HarnessApp> => {
     };
     const onError = (error: Error): void => {
       server.removeListener('listening', onListening);
-      void app.close().then(
-        () => rejectListening(error),
-        () => rejectListening(error),
-      );
+      rejectAfterClose(error);
     };
-    server = app.listen(port, host, onListening);
+    try {
+      server = app.listen(port, host, onListening);
+    } catch (error: unknown) {
+      rejectAfterClose(error);
+      return;
+    }
     server.once('error', onError);
   });
   return app;

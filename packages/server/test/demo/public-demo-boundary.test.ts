@@ -348,6 +348,19 @@ describe('public demo capability boundary', () => {
 
   it('rejects startServer when the HTTP listener fails before readiness', async () => {
     vi.stubEnv('HARNESS_MODE', 'public');
+    let close: (() => Promise<void>) | undefined;
+    vi.doMock('../../src/app.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/app.js')>('../../src/app.js');
+      return {
+        ...actual,
+        createApp: (options: Parameters<typeof actual.createApp>[0]) => {
+          const app = actual.createApp(options);
+          close = vi.fn(app.close.bind(app));
+          app.close = close;
+          return app;
+        },
+      };
+    });
     let httpServer: Server | undefined;
     vi.spyOn(Server.prototype, 'listen')
       .mockImplementation(function mockListen(this: Server) {
@@ -365,6 +378,33 @@ describe('public demo capability boundary', () => {
     httpServer!.emit('error', bindingError);
 
     await expect(started).rejects.toBe(bindingError);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('closes app resources when listen throws synchronously', async () => {
+    vi.stubEnv('HARNESS_MODE', 'public');
+    let close: (() => Promise<void>) | undefined;
+    vi.doMock('../../src/app.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/app.js')>('../../src/app.js');
+      return {
+        ...actual,
+        createApp: (options: Parameters<typeof actual.createApp>[0]) => {
+          const app = actual.createApp(options);
+          close = vi.fn(app.close.bind(app));
+          app.close = close;
+          return app;
+        },
+      };
+    });
+    const bindingError = new RangeError('invalid port regression');
+    vi.spyOn(Server.prototype, 'listen').mockImplementation(() => {
+      throw bindingError;
+    });
+
+    const { startServer } = await import('../../src/server.js');
+
+    await expect(startServer()).rejects.toBe(bindingError);
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it('restores the real HTTP listen implementation after server import coverage', () => {
