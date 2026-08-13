@@ -6,7 +6,9 @@ Coding Agent Harness 是一个 TypeScript 编码智能体工作台。它把 LLM 
 
 本项目的可信完整交付是**本地运行**：完整 LLM、文件、Shell、测试和 Git 工具只应在用户控制的机器上，以 `HARNESS_MODE=local` 运行，并绑定 `127.0.0.1` 或 `localhost`。
 
-`HARNESS_MODE=public` 只提供进程内、无真实 LLM 的确定性演示。它不接收、存储或使用 API Key，不执行 Shell、Git 或测试子进程，也不是完整产品入口。仓库没有经过核验的外部在线地址；文档不把任何历史地址当作可用交付物。
+线上 WebUI 是浏览器内、无真实 LLM 的确定性静态演示。它不接收、存储或使用 API Key，不执行 Shell、Git 或测试子进程，也不是完整产品入口。GitHub Pages 工作流已就绪；实际地址只在仓库启用 Pages 并成功发布后记录。
+
+构建静态演示：`npm.cmd run build:static-demo`，产物位于 `packages/server/dist/static-demo/`。主分支 CI 全部通过后，`deploy-static-demo` 作业才会发布该目录，不需要服务器或云端秘密。
 
 ## 前置条件
 
@@ -145,5 +147,7 @@ npm.cmd run build
 任务工作区是临时空间。“导出全部产物”会验证本次会话记录的每个文件，并原子写入 `.harness/outputs/<session-id>/`；`manifest.json` 保存路径、大小与 SHA-256，后台回收不会删除导出副本。
 
 保存接口为 `POST /api/agent/sessions/:sessionId/save`，请求体为空对象。它导出完整会话清单，并拒绝路径穿越、符号链接、摘要不匹配及覆盖既有导出。`public` 模式不提供持久化。
+
+导出后可选择“预览并应用到项目”。系统先展示创建/替换路径与文本内容；替换现有文件标记为危险操作。批准令牌绑定清单摘要与目标路径集合、只能消费一次，导出内容变化后必须重新预览。
 
 线上 WebUI 使用 `npm run build:static-demo` 生成纯静态机制演示，可托管于 GitHub Pages，无需部署服务器或配置秘密。真实 LLM、系统凭据库与完整工具只在 loopback 本地版启用。

@@ -9,9 +9,9 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "verify:packages": "node scripts/verify-packages.mjs",
     "check:docs": "node scripts/check-document-consistency.mjs",
-    "test:docs": "node --test scripts/check-document-consistency.test.mjs"
-    ,"build:static-demo": "set HARNESS_STATIC_DEMO=1&& npm run build:static-demo --workspace @harness/server"
-    ,"verify:static-boundary": "node scripts/verify-static-boundary.mjs"
+    "test:docs": "node --test scripts/check-document-consistency.test.mjs",
+    "build:static-demo": "npm run build:static-demo --workspace @harness/server",
+    "verify:static-boundary": "node scripts/verify-static-boundary.mjs"
   },
   "devDependencies": {
     "typescript": "^5.5.0"

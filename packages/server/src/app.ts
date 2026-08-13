@@ -45,6 +45,7 @@ export type HarnessApp = Express & {
 export interface AppOptions {
   mode?: AppMode;
   workspaceRoot?: string;
+  projectRoot?: string;
   now?: () => Date;
   idGenerator?: () => string;
   fetchImpl?: typeof fetch;
@@ -142,6 +143,7 @@ export const createApp = (options: AppOptions = {}): HarnessApp => {
   const workspaceRoot = options.workspaceRoot
     ?? process.env.HARNESS_WORKSPACE_ROOT
     ?? join(process.cwd(), '.harness-workspaces');
+  const projectRoot = options.projectRoot ?? process.cwd();
   const credentialStore = options.credentialStore ?? disabledCredentialStore();
   const sessionStore = policy.mode === 'local'
     ? options.sessionStore!
@@ -195,6 +197,7 @@ export const createApp = (options: AppOptions = {}): HarnessApp => {
     abortTimeoutMs: options.abortTimeoutMs,
     historySaveTimeoutMs: options.historySaveTimeoutMs,
       workspaceRoot,
+      projectRoot,
       workspaceManager,
     });
   let closed = false;

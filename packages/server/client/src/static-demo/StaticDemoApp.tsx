@@ -13,6 +13,6 @@ export function StaticDemoApp() {
       </article>)}
     </section>
     <div className="actions"><button onClick={() => setVisible(done ? 0 : visible + 1)}>{done ? '重新演示' : visible ? '下一步' : '开始演示'}</button>
-      <a href="https://github.com/" rel="noreferrer">完整本地版安装说明</a></div>
+      <a href="https://github.com/Sherryicecream/CodingAgentHarness#本地-webui" rel="noreferrer">完整本地版安装说明</a></div>
   </main>;
 }

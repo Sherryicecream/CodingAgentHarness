@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "build:static-demo": "vite build client --outDir ../dist/static-demo --emptyOutDir",
+    "build:static-demo": "vite build client --config client/vite.static.config.ts --emptyOutDir",
     "dev": "tsx src/server.ts",
     "build": "tsup src/server.ts --format esm --dts --clean && vite build client --emptyOutDir",
     "typecheck": "tsc -p tsconfig.json --noEmit",

@@ -65,6 +65,8 @@ CLI 原先依赖 monorepo 布局；Task 4 改为通过 `@harness/server` 的 exp
 
 ### 凭据测试
 
+2026-08-13 的批准设计取代了以下历史加密文件方案：生产代码已删除 `HARNESS_CREDENTIALS_FILE`、主密码和 `credentials.enc`，测试通过注入的 keyring port 或显式禁用原生 keyring，绝不触碰真实用户凭据。自动打包安装生命周期现已闭合。
+
 原计划希望在 tarball verifier 中同时做凭据生命周期。由于 Task 4 已覆盖打包方向且真实默认凭据路径可能触及旧用户文件，Task 5 经协调收窄为本地 source Server 的隔离 HTTP 生命周期，并添加 `HARNESS_CREDENTIALS_FILE` 测试 seam。默认仍是 `~/.harness/credentials.enc`。
 
 ## 偏差清单
