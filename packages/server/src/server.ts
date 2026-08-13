@@ -20,8 +20,22 @@ export const startServer = async (): Promise<HarnessApp> => {
   const app = createApp({ mode: policy.mode, ...localOptions });
   const port = process.env.PORT ? Number(process.env.PORT) : 3000;
   const host = process.env.HOST || '127.0.0.1';
-  app.listen(port, host, () => {
-    console.log(`Harness server started: http://${host}:${port}`);
+  await new Promise<void>((resolveListening, rejectListening) => {
+    let server: ReturnType<typeof app.listen>;
+    const onListening = (): void => {
+      server.removeListener('error', onError);
+      console.log(`Harness server started: http://${host}:${port}`);
+      resolveListening();
+    };
+    const onError = (error: Error): void => {
+      server.removeListener('listening', onListening);
+      void app.close().then(
+        () => rejectListening(error),
+        () => rejectListening(error),
+      );
+    };
+    server = app.listen(port, host, onListening);
+    server.once('error', onError);
   });
   return app;
 };

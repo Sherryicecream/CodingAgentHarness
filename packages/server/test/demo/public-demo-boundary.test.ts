@@ -308,7 +308,7 @@ describe('public demo capability boundary', () => {
     expect(events.some((event) => event.type === 'complete')).toBe(true);
   });
 
-  it('imports the real server module without listening or loading privileged modules', async () => {
+  it('imports safely and resolves startServer only after HTTP listening', async () => {
     vi.stubEnv('HARNESS_MODE', 'public');
     vi.doMock('@harness/core', () => { throw new Error('CORE_BARREL_LOADED'); });
     vi.doMock('node:child_process', () => { throw new Error('CHILD_PROCESS_MODULE_LOADED'); });
@@ -318,16 +318,53 @@ describe('public demo capability boundary', () => {
     vi.doMock('../../src/agent/privileged-agent-run.js', () => {
       throw new Error('PRIVILEGED_AGENT_MODULE_LOADED');
     });
+    let listeningCallback: (() => void) | undefined;
     const listen = vi.spyOn(Server.prototype, 'listen')
-      .mockReturnValue({} as Server);
+      .mockImplementation(function mockListen(this: Server, ...args: unknown[]) {
+        listeningCallback = args.find((argument) => typeof argument === 'function') as (() => void) | undefined;
+        return this;
+      });
 
     const serverModule = await import('../../src/server.js');
     expect(serverModule.startServer).toEqual(expect.any(Function));
     expect(listen).not.toHaveBeenCalled();
 
-    const app = await serverModule.startServer();
-    closeApp.push(app.close);
+    let resolved = false;
+    const started = serverModule.startServer().then((app) => {
+      resolved = true;
+      return app;
+    });
+    await Promise.resolve();
+
     expect(listen).toHaveBeenCalledTimes(1);
+    expect(listeningCallback).toEqual(expect.any(Function));
+    expect(resolved).toBe(false);
+
+    listeningCallback!();
+    const app = await started;
+    closeApp.push(app.close);
+    expect(resolved).toBe(true);
+  });
+
+  it('rejects startServer when the HTTP listener fails before readiness', async () => {
+    vi.stubEnv('HARNESS_MODE', 'public');
+    let httpServer: Server | undefined;
+    vi.spyOn(Server.prototype, 'listen')
+      .mockImplementation(function mockListen(this: Server) {
+        httpServer = this;
+        return this;
+      });
+
+    const { startServer } = await import('../../src/server.js');
+    const started = startServer();
+    await Promise.resolve();
+    expect(httpServer).toBeDefined();
+
+    const bindingError = new Error('EADDRINUSE regression');
+    httpServer!.once('error', () => undefined);
+    httpServer!.emit('error', bindingError);
+
+    await expect(started).rejects.toBe(bindingError);
   });
 
   it('restores the real HTTP listen implementation after server import coverage', () => {
