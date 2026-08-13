@@ -65,7 +65,7 @@ describe('MemoryStore', () => {
         projectPath: '/project/a',
       });
 
-      const results = await store.search('camelCase');
+      const results = await store.search('/project/a', 'camelCase');
       expect(results.length).toBeGreaterThanOrEqual(1);
       expect(results.some(r => r.content.includes('camelCase'))).toBe(true);
     });
@@ -84,7 +84,7 @@ describe('MemoryStore', () => {
         projectPath: '/project/a',
       });
 
-      const results = await store.search('Use', { type: 'convention' });
+      const results = await store.search('/project/a', 'Use', { type: 'convention' });
       expect(results.length).toBeGreaterThanOrEqual(1);
       for (const r of results) {
         expect(r.type).toBe('convention');
@@ -107,13 +107,34 @@ describe('MemoryStore', () => {
       // Advance time by 2 seconds
       vi.setSystemTime(new Date('2024-01-01T00:00:02.000Z'));
 
-      const results = await store.search('camelCase');
+      const results = await store.search('/project/a', 'camelCase');
       expect(results.length).toBeGreaterThanOrEqual(1);
       const updated = results.find(r => r.id === entry.id);
       expect(updated).toBeDefined();
       expect(updated!.lastAccessedAt.getTime()).toBe(new Date('2024-01-01T00:00:02.000Z').getTime());
 
       vi.useRealTimers();
+    });
+
+    it('should never return same-keyword memories from another project', async () => {
+      await store.add({
+        type: 'convention',
+        content: 'Use project memory for releases',
+        source: 'project-a',
+        projectPath: '/project/a',
+      });
+      await store.add({
+        type: 'convention',
+        content: 'Use project memory for releases',
+        source: 'project-b',
+        projectPath: '/project/b',
+      });
+
+      const results = await store.search('/project/a', 'project memory');
+
+      expect(results).toHaveLength(1);
+      expect(results[0].projectPath).toBe('/project/a');
+      expect(results[0].source).toBe('project-a');
     });
   });
 
@@ -190,10 +211,30 @@ describe('MemoryStore', () => {
       const before = await store.list('/project/a');
       expect(before).toHaveLength(1);
 
-      await store.delete(entry.id);
+      await store.delete('/project/a', entry.id);
 
       const after = await store.list('/project/a');
       expect(after).toHaveLength(0);
+    });
+
+    it('should not delete a different project\'s memory when given its id', async () => {
+      const entryA = await store.add({
+        type: 'convention',
+        content: 'Project A deletion target',
+        source: 'project-a',
+        projectPath: '/project/a',
+      });
+      const entryB = await store.add({
+        type: 'convention',
+        content: 'Project B must remain',
+        source: 'project-b',
+        projectPath: '/project/b',
+      });
+
+      await store.delete('/project/a', entryB.id);
+
+      await expect(store.list('/project/a')).resolves.toMatchObject([{ id: entryA.id }]);
+      await expect(store.list('/project/b')).resolves.toMatchObject([{ id: entryB.id }]);
     });
   });
 });

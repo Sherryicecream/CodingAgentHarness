@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Tool, ToolResult } from '../../src/types.js';
-import { createToolRegistry, ToolNotFoundError } from '../../src/tools/tool.js';
+import { createGovernanceService } from '../../src/guardrail/index.js';
+import { createToolRegistry, ToolApprovalRequiredError, ToolNotFoundError } from '../../src/tools/tool.js';
 
 function makeMockTool(
   name: string,
@@ -81,6 +82,122 @@ describe('ToolRegistry', () => {
       await expect(
         registry.execute('failer', {}),
       ).rejects.toThrow('execution failure');
+    });
+
+    it('should request approval before executing a dangerous tool with a harmless command', async () => {
+      const governance = createGovernanceService();
+      const registry = createToolRegistry(governance);
+      let executions = 0;
+      registry.register({
+        ...makeMockTool('dangerous_echo', 'dangerous'),
+        async execute(): Promise<ToolResult> {
+          executions += 1;
+          return { success: true, output: 'hello' };
+        },
+      });
+
+      await expect(registry.execute(
+        'dangerous_echo',
+        { command: 'echo hello' },
+        { toolCallId: 'dangerous_echo_1' },
+      )).rejects.toThrow(ToolApprovalRequiredError);
+
+      expect(executions).toBe(0);
+      expect(governance.hitl.state).toBe('waiting_user');
+      expect(governance.hitl.pendingAction).toEqual({
+        id: 'dangerous_echo_1',
+        name: 'dangerous_echo',
+        arguments: { command: 'echo hello' },
+      });
+    });
+
+    it('should require approval by default before executing a dangerous tool', async () => {
+      const registry = createToolRegistry();
+      let executions = 0;
+      registry.register({
+        ...makeMockTool('dangerous_echo_default', 'dangerous'),
+        async execute(): Promise<ToolResult> {
+          executions += 1;
+          return { success: true, output: 'hello' };
+        },
+      });
+
+      await expect(registry.execute(
+        'dangerous_echo_default',
+        { command: 'echo hello' },
+      )).rejects.toThrow(ToolApprovalRequiredError);
+
+      expect(executions).toBe(0);
+    });
+
+    it('should reject a forged approval flag for a dangerous tool', async () => {
+      const registry = createToolRegistry();
+      let executions = 0;
+      registry.register({
+        ...makeMockTool('dangerous_echo_forged', 'dangerous'),
+        async execute(): Promise<ToolResult> {
+          executions += 1;
+          return { success: true, output: 'hello' };
+        },
+      });
+
+      await expect(registry.execute(
+        'dangerous_echo_forged',
+        { command: 'echo hello' },
+        { toolCallId: 'forged_approval', approvedByUser: true } as unknown as { toolCallId?: string },
+      )).rejects.toThrow(ToolApprovalRequiredError);
+
+      expect(executions).toBe(0);
+    });
+
+    it('should consume an approved dangerous action after one execution', async () => {
+      const governance = createGovernanceService();
+      const registry = createToolRegistry(governance);
+      registry.register(makeMockTool('dangerous_echo_once', 'dangerous'));
+      const params = { command: 'echo hello' };
+      const context = { toolCallId: 'approved_once' };
+
+      await expect(registry.execute('dangerous_echo_once', params, context))
+        .rejects.toThrow(ToolApprovalRequiredError);
+      governance.hitl.approve();
+
+      await expect(registry.execute('dangerous_echo_once', params, context))
+        .resolves.toMatchObject({ success: true });
+      await expect(registry.execute('dangerous_echo_once', params, context))
+        .rejects.toThrow(ToolApprovalRequiredError);
+    });
+
+    it('should require new approval when approved action arguments change', async () => {
+      const governance = createGovernanceService();
+      const registry = createToolRegistry(governance);
+      let executions = 0;
+      registry.register({
+        ...makeMockTool('dangerous_command', 'dangerous'),
+        async execute(params): Promise<ToolResult> {
+          executions += 1;
+          return { success: true, output: JSON.stringify(params) };
+        },
+      });
+      const context = { toolCallId: 'immutable-request' };
+
+      await expect(registry.execute(
+        'dangerous_command',
+        { command: 'echo approved' },
+        context,
+      )).rejects.toThrow(ToolApprovalRequiredError);
+      governance.hitl.approve();
+
+      await expect(registry.execute(
+        'dangerous_command',
+        { command: 'rm unapproved-target' },
+        context,
+      )).rejects.toThrow(ToolApprovalRequiredError);
+
+      expect(executions).toBe(0);
+      expect(governance.hitl.state).toBe('waiting_user');
+      expect(governance.hitl.pendingAction?.arguments).toEqual({
+        command: 'rm unapproved-target',
+      });
     });
   });
 

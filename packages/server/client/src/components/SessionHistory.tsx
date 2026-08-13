@@ -80,7 +80,7 @@ export function SessionHistory({ mode }: { mode: SessionHistoryMode }) {
                   <div className="session-time">{timeStr}</div>
                 </div>
                 <span className={`badge badge-${['completed', 'failed', 'blocked', 'running'].includes(session.status) ? session.status : 'completed'}`}>
-                  {session.status === 'completed' || session.status === 'max_iterations' ? '已完成' : session.status === 'failed' ? '失败' : session.status === 'blocked' ? '已拦截' : '运行中'}
+                  {session.status === 'completed' ? '已完成' : session.status === 'failed' ? '失败' : session.status === 'blocked' ? '已拦截' : '运行中'}
                 </span>
               </div>
 

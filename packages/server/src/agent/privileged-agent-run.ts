@@ -3,6 +3,7 @@ import {
   MockLLMAdapter,
   createAgentLoop,
   createContextBuilder,
+  createMemoryStore,
   createFailureClassifier,
   createFeedbackLoop,
   createFixSuggestionBuilder,
@@ -12,7 +13,9 @@ import {
   createTestRunner,
   type AgentLoop,
   type LLMAdapter,
+  type MemoryStore,
 } from '@harness/core';
+import { join } from 'node:path';
 import type {
   AgentRun,
   AgentRunOutput,
@@ -50,6 +53,17 @@ class LLMProviderError extends Error {
   }
 }
 
+const createProjectMemoryStore = (workspace: string): MemoryStore => {
+  const store = createMemoryStore(join(workspace, '.harness-memories.db'));
+  return {
+    add: async (entry) => (await store).add(entry),
+    search: async (projectPath, query, options) => (await store).search(projectPath, query, options),
+    list: async (projectPath) => (await store).list(projectPath),
+    delete: async (projectPath, id) => (await store).delete(projectPath, id),
+    getByType: async (projectPath, type) => (await store).getByType(projectPath, type),
+  };
+};
+
 const createTransientDeepSeekResource: ByokAdapterFactory = (apiKey) => {
   let adapter: DeepSeekAdapter | undefined = new DeepSeekAdapter({
     apiKey,
@@ -72,8 +86,8 @@ const createTransientDeepSeekResource: ByokAdapterFactory = (apiKey) => {
 
 export const createPrivilegedAgentRun = (
   options: PrivilegedAgentRunOptions,
-): AgentRun => ({ session, task, mode, emit, apiKey }) => {
-  const tools = createPolicyToolRegistry(options.policy, session.workspace);
+): AgentRun => ({ session, task, mode, emit, apiKey, artifactTracker }) => {
+  const tools = createPolicyToolRegistry(options.policy, session.workspace, artifactTracker);
   const governance = createGovernanceService();
   const feedback = createFeedbackLoop(
     createTestRunner(),
@@ -92,7 +106,7 @@ export const createPrivilegedAgentRun = (
   } else {
     let serverApiKey = '';
     if (mode === 'server' && options.policy.allowServerCredentials) {
-      serverApiKey = options.credentialStore.getKey('harness/deepseek-api-key') || '';
+      serverApiKey = options.credentialStore.getKey() || '';
     }
     llm = serverApiKey
       ? new DeepSeekAdapter({
@@ -119,6 +133,7 @@ export const createPrivilegedAgentRun = (
     feedback,
     contextBuilder: createContextBuilder(),
     stopCondition: createStopCondition(),
+    memoryStore: createProjectMemoryStore(session.workspace),
     config: { maxIterations: 10 },
     onEvent: (type, data) => emit(type as SSEEvent['type'], data),
   });

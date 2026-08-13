@@ -14,5 +14,35 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm install
+      - run: npm ci
+      - run: npm run typecheck
       - run: npm test
+      - run: npm run build
+      - run: npm run verify:packages
+      - run: npm run build:static-demo
+      - run: npm run verify:static-boundary
+      - run: npm run check:docs
+
+  deploy-static-demo:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: unit-test
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm run build:static-demo
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: packages/server/dist/static-demo
+      - id: deployment
+        uses: actions/deploy-pages@v4

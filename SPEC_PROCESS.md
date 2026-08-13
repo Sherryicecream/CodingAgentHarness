@@ -1,226 +1,98 @@
-# SPEC_PROCESS.md
+# SPEC_PROCESS：规约形成与偏差记录
 
-## Brainstorming 关键节点
+## 证据范围
 
-Brainstorming 阶段（使用 `superpowers:brainstorming` 技能）产出了几个关键设计决策，塑造了整个项目的方向。以下是关键节点和各决策的 rationale。
+本文只叙述可从当前 Git 历史、`docs/superpowers/` 计划以及 `.superpowers/sdd/2026-08-12-final-delivery-hardening/` briefs/reports 交叉确认的过程。早期文档曾包含冷启动、外部发布、回溯分支和 PR 等详细故事，但当前仓库不足以独立核验其会话输入、耗时或外部结果；这些故事不作为本轮事实证据。
 
-### 1. 语言选择：TypeScript
+## 从需求到加固规约
 
-**决策**：选择 TypeScript（严格模式）而非 Python 或 Go。
+2026-08-12，先以 `72993d7` 写入最终本地交付设计，再以 `153b8f7` 写入实施计划。设计把交付契约收窄为：
 
-**理由**：项目需要强类型系统来保证组件之间的接口契约。TypeScript 的类型系统允许 Harness 定义可注入的接口（LLMAdapter、Tool、Guardrail、FeedbackLoop），并在编译时强制执行。这对可 Mock 测试的架构至关重要——编译器能捕获 Mock 实现与真实实现之间的不匹配。Python 的类型提示是可选的且仅在运行时生效；Go 缺乏插件化 ResultParser 和配置合并所需的表达能力。
+- 完整能力在 localhost 的 `local` 模式运行。
+- `public` 只做确定性安全演示，不接触凭据和进程工具。
+- 三个 workspace 包通过 release tarball 交付；没有发布就不写最终地址。
+- 五个实现加固任务先完成，最后统一修正文档。
 
-### 2. LLM 选择：DeepSeek
+这次先写 design/plan、再执行 tasks 的顺序可由提交历史确认。它不证明更早的项目阶段也使用了同样流程。
 
-**决策**：选择 DeepSeek API（OpenAI 兼容）作为主要 LLM 供应商。
+## 实际执行方式
 
-**理由**：DeepSeek 提供 OpenAI 兼容的 API，适配器可以使用标准的 `openai` npm 包，只需配置自定义 `baseURL`。这使我们在使用高性价比模型的同时，与整个 OpenAI 工具生态兼容。适配器模式意味着切换到其他供应商（OpenAI、Anthropic 等）只需编写新的适配器类——无需修改 Harness 核心。
+### 工作区
 
-### 3. 重点维度：反馈闭环
+本轮加固在 `D:\CodingAgentHarness\.worktrees\final-delivery`、分支 `codex/final-delivery` 上执行，基线为 `origin/master` 的 `0fb39b8`。这是当前可观察事实。旧日志关于早期阶段是否从一开始使用 worktree 的描述互相矛盾，因此本轮不复述或修补那段历史。
 
-**决策**：选择反馈闭环（测试驱动的自动修复迭代）作为核心贡献机制。
+### 任务切片
 
-**理由**：在六个 Harness 机制中，反馈闭环最能体现"工程层"的理念。它是一个确定性的流水线（TestRunner → ResultParser → FailureClassifier → FixSuggestionBuilder），将原始测试输出转化为结构化 LLM 上下文。与 Agent 主循环（薄编排层）或工具系统（标准实现）不同，反馈闭环是 Harness 增加独特价值的地方——它是使 Agent 在迭代中不断改进的"学习"机制。
+计划把风险拆成可独立验证的边界：
 
-### 4. 架构：Web 优先
+1. dangerous risk 是否真正进入最终执行治理。
+2. memory 是否在 SQL、AgentLoop 和 Server 调用路径中保持项目隔离。
+3. feedback 是否实际改变下一次 mock LLM 行动。
+4. 打包后的 CLI 是否只依赖 package metadata，并清除 stale build chunk。
+5. 本地凭据是否能在隔离路径完成真实 HTTP 生命周期。
+6. 产品文档是否只保留当前证据支持的交付契约。
 
-**决策**：选择 Express + React Web 应用作为主要界面，CLI 为可选补充。
+每个 brief 指定接口、目标文件、RED/GREEN 命令和原子提交；对应 report 保存实际输出、审查修复和未解决关注项。
 
-**理由**：Web 界面提供了 Agent 执行过程的实时可视化（SSE 流式推送）、交互式 HITL 审批弹窗、以及丰富的反馈时间线——这在纯终端 CLI 中无法实现。Web 架构也使 Harness 可以部署到云端，从任何设备访问。CLI 是一个薄封装层，功能是启动服务器并打开浏览器。
+### TDD 与审查
 
-### 5. 部署：阿里云 ECS
+Tasks 1–5 都按 brief 先写行为测试并记录 RED，然后做最小实现、运行 GREEN，再接受独立审查。审查不是形式门槛：
 
-**决策**：选择阿里云 ECS（Docker 容器化）作为部署平台。
+- Task 1 经四轮修复，从“能阻断危险工具”收紧到 Registry 不可绕过、批准匹配不可变、批准一次性消费和 abort 安全。
+- Task 2 经两轮修复，补上 Server 生产注入和删除的项目隔离。
+- Task 3 经一轮修复，排除了无条件 FIFO 伪装成反馈因果性的可能。
+- Task 5 审查要求恢复“最小实现后、refactor 前”的独立 GREEN 证据，报告据原始命令结果补齐，没有伪造新运行。
 
-**理由**：阿里云 ECS 提供国内可访问的弹性计算服务，支持 Docker 容器化部署，按量付费。备选方案 Render（免费版）有 15 分钟无请求休眠的限制，唤醒需 30-50 秒，不适合需要持续可用的场景。其他考虑过的方案：Vercel（Serverless，不适合长时间运行的 Agent 任务）、Railway（类似但免费额度更少）、自托管（维护负担）。
+Task 6 也先增加可执行 scanner 测试：受控 stale 文档必须非零并输出七类诊断，受控 clean 文档必须为零。scanner 实现后，再对未修改的真实五份文档捕获 claim-level RED，最后才修正文档。
 
----
+## 已确认的设计演进
 
-## 迭代节选
+### 工具治理
 
-### 迭代 1：工具系统设计
+最初风险模型容易把安全性寄托在命令正则。Task 1 的回归测试表明，registered tool 的 `riskLevel` 本身必须进入最终 dispatch 决策。最终边界由 ToolRegistry 与 Governance 共同执行，AgentLoop 不能用松散布尔值跳过授权。
 
-**初始方案**：将工具定义为按名称注册的独立函数。
+### 项目记忆
 
-**AI 追问**："工具是否应该有风险等级？护栏如何知道哪些工具需要拦截？"
+记忆实现使用 `sql.js`，避免 Windows 原生 SQLite 编译依赖。Task 2 进一步证明“表里有 project_path”不等于隔离完成：搜索、删除、AgentLoop retrieval 和 Server production injection 都必须携带同一项目身份。
 
-**决策**：每个工具携带 `riskLevel` 字段（`safe`、`moderate`、`dangerous`）。ToolRegistry 暴露 `getByRiskLevel()` 方法，GovernanceService 可以按风险等级预过滤危险工具。护栏另外检查命令内容（如 `moderate` 工具参数中的 `rm -rf`），实现纵深防御。
+### 反馈闭环
 
-**影响**：这个双层安全模型（工具级风险 + 命令内容模式匹配）成为了核心架构原则。
+预先排队两个 mock 响应只能证明顺序，不能证明反馈导致修正。Task 3 让 selector 只观察实际发送给 LLM 的 request view；第二动作只有在消息包含结构化失败与 actionable fix 时才出现。
 
-### 迭代 2：反馈闭环范围
+### 分发
 
-**初始方案**：反馈闭环应尝试通过生成补丁来自动修复代码。
+CLI 原先依赖 monorepo 布局；Task 4 改为通过 `@harness/server` 的 exports 解析安装入口，并让 Server build 清理旧 chunk。这里发生了重要偏差：指定的完整自动 clean-install 在受限安装阶段超时，不能宣布自动验收成功。用户后来完成一次人工 clean-install、健康页、WebUI 和停止监听验证，这两类证据被明确分开。
 
-**AI 追问**："Harness 应该生成修复，还是只提供结构化上下文让 LLM 生成修复？"
+### 凭据测试
 
-**决策**：Harness 提供结构化上下文（解析的失败信息、按类型分类、按优先级排序、带 diff），但**不生成修复**。LLM 生成修复。Harness 的职责是提供干净、结构化的反馈，让 LLM 的工作更轻松。这个关注点分离至关重要：Harness 是确定性工程，LLM 是创造性智能。
+2026-08-13 的批准设计取代了以下历史加密文件方案：生产代码已删除 `HARNESS_CREDENTIALS_FILE`、主密码和 `credentials.enc`，测试通过注入的 keyring port 或显式禁用原生 keyring，绝不触碰真实用户凭据。自动打包安装生命周期现已闭合。
 
-**影响**：FixSuggestionBuilder 产出 `FixSuggestion` 对象（而非代码补丁），`toContextString()` 方法将其格式化为 LLM 可消费的文本。这保持了 Harness 的确定性和可测试性。
+原计划希望在 tarball verifier 中同时做凭据生命周期。由于 Task 4 已覆盖打包方向且真实默认凭据路径可能触及旧用户文件，Task 5 经协调收窄为本地 source Server 的隔离 HTTP 生命周期，并添加 `HARNESS_CREDENTIALS_FILE` 测试 seam。默认仍是 `~/.harness/credentials.enc`。
 
-### 迭代 3：记忆存储
+## 偏差清单
 
-**初始方案**：使用简单的 JSON 文件存储记忆。
+| 计划/早期说法 | 实际证据 | 当前处理 |
+| --- | --- | --- |
+| 公开入口不运行完整产品（旧说法已否定） | 运行时策略把 public 限制为固定 demo | 文档统一为 local 完整、public 演示 |
+| 指定外部地址可访问 | 当前任务未验证任何地址 | 移除地址与上线保证 |
+| 原生 SQLite driver | package 和实现使用 `sql.js` | SPEC/README 统一为 `sql.js` |
+| Task 4 自动 clean-install 已闭合 | 自动运行超时；人工路径成功 | PLAN 标记部分闭合并保留自动化间隙 |
+| Task 5 必须重复完整 tarball verifier | 协调后改为隔离 credentials seam 与 HTTP lifecycle | 报告说明范围变更，不冒充原计划全部完成 |
+| 旧冷启动记录证明从零复现 | 仓库只有叙述，缺少可独立核验的原始会话证据 | 明确标为历史自述，不作为当前验收 |
 
-**AI 追问**："记忆如何跨项目扩展？并发访问如何处理？"
+## 本轮没有执行的操作
 
-**决策**：使用 SQLite（通过 sql.js）存储记忆。SQLite 提供结构化查询、索引和通过 `project_path` 列实现的按项目隔离。`sql.js` 包（WASM 编译的 SQLite）避免了 Windows 上的原生编译问题。`search()` 方法使用 SQL LIKE 进行关键词匹配，对预期规模（每个项目数百条记录）足够。
+- 未发布 npm package 或 release。
+- 未推送分支、创建 PR 或修改 master。
+- 未使用真实 API Key 或主密码。
+- 未修改 `REFLECTION.md`，也未代写学生反思。
+- 未把旧测试总数、外部操作或无法复现的会话细节包装成事实。
 
-**影响**：记忆系统获得了结构化搜索、类型过滤和基于时间的排序，无需增加基础设施复杂度。
+## 可复用教训
 
----
-
-## AI 建议采纳 vs 推翻
-
-### 采纳的建议
-
-| 建议 | 理由 |
-|-----------|-----------|
-| TypeScript 严格模式 | 实现接口契约和编译时安全 |
-| MockLLMAdapter 用于确定性测试 | 使所有 Harness 机制无需 LLM API 调用即可测试 |
-| 工具风险等级体系 | 实现纵深防御安全模型 |
-| 基于插件的 ResultParser | 支持 Jest、Vitest 和未来框架，无需修改核心 |
-| SSE 用于实时流式推送 | 为 Web UI 提供实时代理执行反馈 |
-| SQLite 用于记忆存储 | 结构化存储，无需外部数据库依赖 |
-| npm workspaces 管理 monorepo | 原生 Node.js 解决方案，无需额外工具 |
-| 选用 Vitest 而非 Jest | 更快，原生 ESM 支持，更好的 TypeScript 集成 |
-
-### 推翻的建议
-
-| 建议 | 推翻理由 |
-|-----------|---------------|
-| 使用 React Router 做前端路由 | 对于只有 3 个视图的单页应用来说过度设计。简单的状态路由足够 |
-| 实现 OAuth 认证 | 单用户本地工具的范围外。通过 OS 密钥链管理凭据即可 |
-| 使用 WebSocket 而非 SSE | SSE 更简单，单向（服务器→客户端），足够使用。双向通信不需要，因为客户端通过 REST 通信 |
-| 添加插件市场 | v0.1 版本为时过早。ResultParser 插件系统就是扩展点；市场增加复杂度而无用户需求 |
-| 在 Harness 中自动生成代码修复 | 违反 Harness/LLM 关注点分离。Harness 提供上下文，LLM 生成修复 |
-| Kubernetes 部署配置 | 单实例 Web 应用过度设计。阿里云 ECS 的 Docker 部署是适当复杂度 |
-
----
-
-## Brainstorming 反思
-
-### 做得好的方面
-
-1. **接口优先设计**：Brainstorming 技能推动在实现前定义所有接口（types.ts）。这使得 Phase 2+ 的实现直截了当——每个组件都有清晰的合约。
-
-2. **Mock 优先测试**：早期构建 MockLLMAdapter 的决策带来了巨大回报。所有 450+ 个测试无需 API 调用即可确定性运行，使 CI 快速可靠。
-
-3. **关注点分离**：Harness 做工程、LLM 做智能的清晰边界防止了范围蔓延。反馈闭环是完美例子：它提供上下文，而非修复。
-
-4. **风险等级体系**：双层安全模型（工具风险 + 命令模式）从 Brainstorming 的问题中浮现，并被证明是稳健的设计。
-
-5. **Web 优先决策**：选择 Web UI 而非纯 CLI 是正确的决定。实时反馈时间线和 HITL 弹窗是 Harness 价值的令人信服的展示。
-
-### 可以改进的方面
-
-1. **测试解析器覆盖范围**：Brainstorming 假设了 Jest 输出格式。Vitest 支持后来作为插件添加。事后看来，插件系统应该从一开始就设计好。
-
-2. **记忆模式过于刚性**：四种记忆类型（convention、decision、knowledge、rule）可能过于严格。标签系统会更灵活。
-
-3. **CLI 范围**：CLI 原计划为全功能工具，但最终成为薄服务器启动器。从一开始就设定更现实的 CLI 范围可以节省规划工作。
-
-4. **部署假设**：Brainstorming 假设 Render 能无缝工作。免费版的 15 分钟休眠限制发现得太晚。应该包含付费版建议。
-
-5. **Windows 兼容性**：项目在某些 Shell 命令中使用 Unix 风格路径。Windows 兼容性（Git Bash / WSL 需求）本应从一开始就是设计考虑。
-
----
-
-## 冷启动验证
-
-### 验证说明
-
-通用要求 §4.5 规定：正式实现前，用**一个与主开发智能体不同**的 agent，在**不向其提供你与主 agent 对话历史**的前提下，仅凭 `SPEC.md` + `PLAN.md` 尝试实现 1–2 个 task（约 1–2 小时），以此检验规约质量。
-
-本项目在全部实现完成后补做了此验证。验证分两轮：
-
-| 轮次 | Agent | 耗时 | 深度 | 产出 |
-|------|-------|------|------|------|
-| ① 初轮（实现后补做） | ChatGPT | 约 15 分钟 | 仅提问，未实际实现 | 发现 3 个缺陷，已修正 |
-| ② 正式验证（2026-08-03） | **Codex** | 约 30 分钟 | 完整实现 Task 6 + 7，测试通过 | 发现 8 个缺陷，详见下文 |
-
-> 初轮验证流于表面（仅对话，未真正实现），因此补做了正式验证。以下记录以正式验证（Codex）为主，合并初轮的有效发现。
-
----
-
-### 验证信息
-
-| 字段 | 值 |
-|-------|-------|
-| **Agent** | Codex（GitHub Copilot） |
-| **日期** | 2026-08-03 |
-| **选定任务** | Task 6（LLMAdapter 接口）+ Task 7（MockLLMAdapter） |
-| **会话** | 全新会话，无先前上下文或记忆 |
-| **输入** | 仅 SPEC.md + PLAN.md |
-
-### 实现结果
-
-Agent 被要求仅使用 SPEC 和 PLAN 文档实现 Tasks 6 和 7。它被指示在遇到不确定之处时暂停，而非自行猜测。
-
-**TDD 结果：**
-- **Task 6 RED 阶段**：1 个类型检查测试失败（证明接口模块尚不存在）
-- **Task 7 RED 阶段**：4 个行为测试中 3 个失败，1 个通过（证明所有指定行为均可测试）
-- **GREEN 阶段**：2 个测试文件共 5 个测试全部通过
-- `tsc --noEmit`：通过
-- **代码评审**：通过 / 批准，无严重或重要问题
-- **变异测试**：错误名称断言成功捕获回归
-
-### Agent 暂停点
-
-| # | 暂停点 | 问题 | 暴露的缺陷 |
-|---|-------------|----------|----------------|
-| 1 | 检查工作区后 | "提示说 `types.ts` 已存在，但工作区只有 4 个 markdown 文件。请提供缺失的项目脚手架和 `types.ts`，或授权我创建它们。" | 冷启动 prompt 错误假设了已有代码库；未描述 Phase 1 任务的脚手架步骤 |
-| 2 | Task 6 RED 阶段 | （未提问——被授权继续）使用 `tsc --noEmit` 验证类型存在，因为发现 Vitest 本身无法验证纯类型模块 | PLAN Task 6 仅用 Vitest 测试无法证明纯类型模块存在 |
-
-### 暴露的 SPEC/PLAN 缺陷
-
-| # | 缺陷 | 位置 | 严重程度 | 处理 |
-|---|--------|----------|----------|------------|
-| 1 | **冷启动 prompt 声称 `types.ts` 已存在**——实际上只提供了文档 | `cold-start-prompt.md` | **高** | Prompt 已更新，移除错误假设 |
-| 2 | **Task 2 和 Task 6 都定义了 `LLMAdapter`**——两个权威位置 | `PLAN.md` Task 2 / Task 6 | **中** | Task 2 的 types.ts 不再定义 LLMAdapter；委托给 llm/adapter.ts |
-| 3 | **Task 6 Vitest 测试无法验证纯类型接口**——Vitest 擦除类型导入，即使 `adapter.ts` 不存在也能通过 | `PLAN.md` Task 6 测试 | **高** | 验证命令更新为 `tsc --noEmit`；Vitest 仅保留为运行时测试 |
-| 4 | **`MockLLMExhaustedError` API 未定义**——未指定定义文件、导出风格、构造函数参数或错误消息 | `PLAN.md` Task 7 行为 | **中** | 已补充：从 `mock.ts` 导出、`extends Error`、无参构造、消息 `"MockLLMAdapter: no more responses"` |
-| 5 | **响应数组所有权不明确**——`shift()` 会修改调用者的数组 | `PLAN.md` Task 7 接口 | **中** | 已补充：构造函数浅复制数组；调用者数组不会被修改 |
-| 6 | **TypeScript/Vitest 依赖声明太晚**——Task 42 才列出，但 Tasks 2、3、6、7 已需要编译 | `PLAN.md` Tasks 2-7 / Task 42 | **高** | 将 devDependencies 声明提前到 Phase 1（Task 1） |
-| 7 | **Render vs Vercel 矛盾**——SPEC §3.7/§5 说 Render，§10/§11 说 Vercel | `SPEC.md` §10, §11 | **中** | 统一为 Render（后改为阿里云 ECS） |
-| 8 | **PLAN 头部"278 tests passing"缺乏证据**——未说明来源或上下文 | `PLAN.md` 头部 | **中** | 已添加 "(current state as of 2026-08-03)" 限定 |
-
-### 与初轮验证合并
-
-初轮（ChatGPT）验证发现 3 个缺陷，均在 commit `be10126` 中修复：
-
-| # | 缺陷 | 状态 | 与 Codex 发现的关系 |
-|---|--------|--------|---------------------------|
-| AgentContext 生命周期未定义 | 已在 `be10126` 修复 | Codex 未再次发现——确认修复充分 |
-| AgentResponse 缺少调试字段 | 已在 `be10126` 修复 | Codex 未再次发现——确认修复充分 |
-| Message→OpenAI 映射缺失 | 已在 `be10126` 修复 | Codex 未再次发现——确认修复充分 |
-
-**合并发现的结论：** 初轮验证有用但浅显——它识别了 3 个真实问题，但遗漏了另外 8 个只有在全新 agent 实际尝试实现代码时才会暴露的问题。这确认了 §4.5 的 rationale：**仅提问不实现，会严重高估规约的清晰度。**
-
-### 解读偏差
-
-| 解读 | 原始意图 | 根本原因 |
-|---------------|----------------|------------|
-| `types.ts` 不再定义 `LLMAdapter`；`llm/adapter.ts` 是唯一权威位置 | `types.ts` 应定义所有共享类型；`llm/adapter.ts` 重新导出 | SPEC/PLAN 歧义——两个定义没有优先级规则 |
-| Mock 构造函数复制输入数组 | PLAN 未指定所有权 | SPEC/PLAN 遗漏——数组修改行为未定义 |
-| 只实现 core 工作区，跳过 server/cli | 冷启动应只覆盖 Tasks 6/7 | 范围边界不清晰——Task 1 暗示了所有三个包 |
-
-### 已做的修订
-
-基于验证发现，已应用以下修订：
-
-| 文件 | 修订内容 | Commit |
-|------|----------|--------|
-| `SPEC.md` | 将 §10 和 §11 中的 "Vercel" 替换为 "Render"；统一部署目标 | `84a3530` |
-| `PLAN.md` | Task 2: 移除 `LLMAdapter` 接口定义（委托给 Task 6）。Task 6: 在验证命令中添加 `tsc --noEmit`。Task 7: 补充 `MockLLMExhaustedError` API 规范、数组复制语义。Task 1: 添加 devDependencies（TypeScript、Vitest） | `be10126` + `c4c36ec` |
-| `cold-start-prompt.md` | 移除 "existing `types.ts`" 假设，添加脚手架说明 | `fdb4e2e`（已删除） |
-
-### 评估
-
-**SPEC 质量：中等。** Codex agent 能够正确实现 Tasks 6 和 7，所有测试通过。然而，发现了 8 个缺陷——其中 3 个为高严重度。主要问题是：
-
-1. **任务依赖图不明确**——PLAN 未明确说明 Tasks 6/7 依赖 Tasks 1-3（脚手架 + 类型 + 测试配置）。新 agent 必须自行推断。
-2. **测试验证空缺**——纯类型接口无法仅用 Vitest 测试；需要 `tsc --noEmit`。这是 TypeScript 特有的教训，影响了测试设计。
-3. **未定义的错误类型**——即使是像"`MockLLMExhaustedError` 在哪里"这样简单的事情也需要明确的规范。将细节留给"实现者判断"会产生歧义。
-
-**关键教训：** 30 分钟的实现练习发现的缺陷比之前的纯对话轮次更多。这确认了 §4.5 的主张：**冷启动实现是规约质量最有价值的反馈信号。**
+1. 文档状态必须绑定命令、日期和 commit；“全部完成”会掩盖局部自动化间隙。
+2. 安全边界要测试最终执行点，而不是只 grep 配置或断言 helper。
+3. 反馈测试必须证明因果关系，不只是先后顺序。
+4. 环境隔离 seam 应保持默认生产行为不变，并在测试中验证 fallback 没有被触碰。
+5. 人工端到端成功有价值，但必须与自动化可重复性分别记录。
+6. 无法从仓库核验的旧流程应被标注，而不是用更流畅的故事补齐。

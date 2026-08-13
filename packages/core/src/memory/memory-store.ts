@@ -5,9 +5,9 @@ import * as fs from 'node:fs';
 
 export interface MemoryStore {
   add(entry: Omit<MemoryEntry, 'id' | 'createdAt' | 'lastAccessedAt'>): Promise<MemoryEntry>;
-  search(query: string, options?: { type?: string; limit?: number }): Promise<MemoryEntry[]>;
+  search(projectPath: string, query: string, options?: { type?: string; limit?: number }): Promise<MemoryEntry[]>;
   list(projectPath: string): Promise<MemoryEntry[]>;
-  delete(id: string): Promise<void>;
+  delete(projectPath: string, id: string): Promise<void>;
   getByType(projectPath: string, type: MemoryEntry['type']): Promise<MemoryEntry[]>;
 }
 
@@ -77,7 +77,7 @@ export async function createMemoryStore(dbPath: string): Promise<MemoryStore> {
     const now = new Date().toISOString();
     db.run(
       'INSERT INTO memories (id, type, content, source, project_path, created_at, last_accessed_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [id, entry.type, entry.content, entry.source, entry.projectPath ?? '', now, now]
+      [id, entry.type, entry.content, entry.source, entry.projectPath, now, now]
     );
     saveDb();
     return Promise.resolve({
@@ -88,10 +88,10 @@ export async function createMemoryStore(dbPath: string): Promise<MemoryStore> {
     });
   }) as MemoryStore['add'];
 
-  const search = ((query: string, options?: { type?: string; limit?: number }): Promise<MemoryEntry[]> => {
+  const search = ((projectPath: string, query: string, options?: { type?: string; limit?: number }): Promise<MemoryEntry[]> => {
     const limit = options?.limit ?? 10;
-    let sql = 'SELECT * FROM memories WHERE content LIKE ?';
-    const params: any[] = [`%${query}%`];
+    let sql = 'SELECT * FROM memories WHERE project_path = ? AND content LIKE ?';
+    const params: any[] = [projectPath, `%${query}%`];
 
     if (options?.type) {
       sql += ' AND type = ?';
@@ -124,8 +124,8 @@ export async function createMemoryStore(dbPath: string): Promise<MemoryStore> {
     return Promise.resolve(rows.map(rowToEntry));
   }) as MemoryStore['list'];
 
-  const _delete = ((id: string): Promise<void> => {
-    db.run('DELETE FROM memories WHERE id = ?', [id]);
+  const _delete = ((projectPath: string, id: string): Promise<void> => {
+    db.run('DELETE FROM memories WHERE id = ? AND project_path = ?', [id, projectPath]);
     saveDb();
     return Promise.resolve();
   }) as MemoryStore['delete'];

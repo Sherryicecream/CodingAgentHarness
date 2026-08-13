@@ -1,416 +1,157 @@
 # Coding Agent Harness
 
-TypeScript 实现的编码智能体工作台（Harness）。**Agent = LLM + Harness。** Harness 提供工程层：主循环、工具、护栏、反馈闭环、记忆和配置。
+Coding Agent Harness 是一个 TypeScript 编码智能体工作台。它把 LLM 调用、工具执行、治理审批、测试反馈、项目记忆和本地凭据管理组织成可测试的工程系统。
 
----
+## 交付边界
 
-## 这是什么？
+本项目的可信完整交付是**本地运行**：完整 LLM、文件、Shell、测试和 Git 工具只应在用户控制的机器上，以 `HARNESS_MODE=local` 运行，并绑定 `127.0.0.1` 或 `localhost`。
 
-本项目实现了一个编码智能体的 **Harness（工作台）** 侧——围绕 LLM 构建的确定性软件基础设施，将 LLM 从文本生成器转变为可靠的编码助手。Harness 是"工程"部分；LLM 是"智能"部分。
+线上 WebUI 是浏览器内、无真实 LLM 的确定性静态演示。它不接收、存储或使用 API Key，不执行 Shell、Git 或测试子进程，也不是完整产品入口。GitHub Pages 工作流已就绪；实际地址只在仓库启用 Pages 并成功发布后记录。
 
-Harness 提供六大核心机制：
+构建静态演示：`npm.cmd run build:static-demo`，产物位于 `packages/server/dist/static-demo/`。主分支 CI 全部通过后，`deploy-static-demo` 作业才会发布该目录，不需要服务器或云端秘密。
 
-1. **Agent 主循环** — 驱动 LLM-工具-反馈循环的核心编排
-2. **工具系统** — 文件系统、Shell、Git、代码搜索和测试执行
-3. **护栏 + 人工审批（HITL）** — 拦截危险命令并需要人工确认的安全检查
-4. **反馈闭环（核心贡献）** — 自动化的测试驱动修复迭代：运行测试、分类失败、构建修复建议、回灌给 LLM
-5. **记忆系统** — 基于 SQLite 的跨会话知识存储与检索
-6. **配置系统** — 声明式 YAML 配置，带安全凭据管理
+## 前置条件
 
----
+- Node.js 22 LTS（项目运行时和打包验证使用 Node/npm）
+- npm（随 Node.js 安装）
+- Git（从源码开发或检查差异时需要）
+- 支持现代 JavaScript 的浏览器
 
-## 架构
-
-```
-harness/
-├── packages/
-│   ├── core/          @harness/core  — 纯逻辑，可 Mock 测试，零 UI 依赖
-│   ├── server/        @harness/server — Express + React 全栈应用
-│   └── cli/           @harness/cli   — 可选 CLI 启动器
-```
-
-- **`@harness/core`**：所有确定性逻辑 —— LLM 适配器、工具注册表、护栏、HITL 状态机、反馈闭环（测试运行器、结果解析器、失败分类器、修复建议构建器）、记忆存储、配置加载器、Agent 主循环、会话存储。所有接口均可注入，整个系统可用 Mock LLM 进行测试。
-- **`@harness/server`**：Express 服务器，提供 REST API + SSE 流式推送、React 前端（ChatPanel、ToolCallCard、GuardrailDialog、FeedbackTimeline、SessionHistory）。
-- **`@harness/cli`**：最小化 CLI，启动服务器并打开浏览器。
-
----
-
-## 快速开始
-
-### 本地开发
-
-```bash
-# 安装依赖
-npm ci
-
-# 构建所有包
-npm run build
-
-# 运行所有测试（450+ 个测试）
-npm test
-
-# 启动服务
-cd packages/server && npm start
-# 打开 http://localhost:3000
-```
-
-### 可重复演示（无需真实 API Key）
-
-核心机制演示使用确定性的 Mock LLM，可直接运行：
-
-```bash
-npm test --workspace @harness/core -- demo
-npm test --workspace @harness/server -- public-demo
-```
-
-公开模式下，浏览器仍会显示“对话 / 历史 / 配置”三个页面；其中“使用自己的 API Key”和“本地服务器凭据”仅作说明，不能选择。公开模式的历史记录保存在当前浏览器本地；托管的公网 WebUI 不接收、存储或使用 API Key。
-
-### Windows PowerShell 启动
-
-在仓库根目录逐行执行：
+首次从源码运行需要安装依赖并构建：
 
 ```powershell
 npm.cmd ci
 npm.cmd run build
-Set-Location .\packages\server
-$env:NODE_ENV = "development"
+```
+
+macOS/Linux 可将示例中的 `npm.cmd` 替换为 `npm`。
+
+## 本地 WebUI
+
+在仓库根目录执行：
+
+```powershell
 $env:HARNESS_MODE = "local"
 $env:HOST = "127.0.0.1"
 $env:PORT = "3000"
-npm.cmd start
+npm.cmd start --workspace @harness/server
 ```
 
-`npm.cmd start` 会以前台方式运行。服务启动后，请在浏览器或第二个 PowerShell 窗口中打开 `http://127.0.0.1:3000`。
+然后打开 `http://127.0.0.1:3000`。这是本地可信模式；不要把它绑定到公网接口。
 
-云服务器公开演示应使用 `HARNESS_MODE=public`，并绑定 `HOST=0.0.0.0`；不要在公网暴露 `local` 模式。
+开发模式使用源码入口：
 
-### 公网演示与本地完整版本
-
-托管的公网 WebUI 仅运行确定性的安全演示（`demo`）：不调用真实 LLM，也绝不接收、存储或使用 API Key。它会展示三个体验入口，但只启用 `demo`。
-
-要使用真实 API，必须在本机运行完整项目并绑定到 `localhost` 或 `127.0.0.1`。本地用户可以选择“使用自己的 API Key”，或选择“本地服务器凭据”；后者由本地用户在配置页中配置、更新和清除。回环地址上的本地使用不需要 HTTPS 隧道。
-
-### 使用 CLI
-
-```bash
-cd packages/cli && npm run build && npm start
-# 或：npx harness
+```powershell
+$env:HARNESS_MODE = "local"
+$env:HOST = "127.0.0.1"
+npm.cmd run dev --workspace @harness/server
 ```
 
-### 使用 Docker
+## 本地 CLI
 
-```bash
-# 构建镜像
-docker build -t harness .
+CLI 是本地服务器启动器；它解析已安装的 `@harness/server` 包并尝试打开浏览器。
 
-# 运行托管的确定性公网演示；该模式不接收或使用 API Key
-docker run -d -p 3000:3000 -e HARNESS_MODE=public harness
+## 分发
 
-# 打开 http://localhost:3000
+项目选择 npm 包/CLI 分发。发布前用 `npm.cmd run verify:packages` 验证 Core、Server、CLI tarball 入口；正式 Release URL 只在实际发布后补充。目标机器需要 Node.js 22，持久 Key 依赖 Windows Credential Manager、macOS Keychain 或 Linux Secret Service；Linux 无 Secret Service 时使用“仅本次使用”。
+
+从仓库构建并运行：
+
+```powershell
+npm.cmd run build --workspace @harness/core
+npm.cmd run build --workspace @harness/server
+npm.cmd run build --workspace @harness/cli
+$env:HARNESS_MODE = "local"
+$env:HOST = "127.0.0.1"
+npm.cmd start --workspace @harness/cli
 ```
 
-### npm 包（全局安装）
+安装 release tarball 后，包提供 `harness` 命令。当前仓库没有记录最终 tarball 下载 URL；获取时应进入该仓库的 GitHub Releases 页面，选择明确标注的 release，并下载其附件中的 CLI、Server 和 Core tarball。不要根据包名猜测 URL，也不要把 `npm install -g @harness/cli` 当作已经发布的保证。
 
-```bash
-# 全局安装 CLI
-npm install -g @harness/cli
+## 确定性公开演示
 
-# 启动 Harness
-harness
+本地验证公开演示策略：
+
+```powershell
+$env:HARNESS_MODE = "public"
+$env:HOST = "127.0.0.1"
+npm.cmd start --workspace @harness/server
 ```
 
----
+公开模式只运行固定场景，并由服务端能力策略禁用 BYOK、服务器凭据和进程工具。它用于安全地展示工具事件、护栏阻断与反馈修正，不代表真实 LLM 或完整工具链可用。
 
-## 核心功能
+相关演示测试：
 
-### 1. Agent 主循环
-
-主循环编排完整的 Agent 工作流：
-- 从任务、工具、记忆和反馈状态构建上下文
-- 调用 LLM 获取下一步动作
-- 解析响应，提取工具调用
-- 在护栏检查下执行工具
-- 对测试结果运行反馈闭环
-- 检查停机条件（任务完成、达到最大轮次、HITL 阻断）
-
-### 2. 工具系统
-
-七个内置工具：
-
-| 工具 | 风险等级 | 公开模式 | 本地模式 | 描述 |
-|------|---------|---------|---------|------|
-| `read_file` | 安全 | ✅ | ✅ | 读取文件内容，带路径穿越防护 |
-| `write_file` | 中等 | ✅ | ✅ | 写入文件，带 `.git` 保护 |
-| `search_code` | 安全 | ✅ | ✅ | 代码搜索（模式匹配） |
-| `execute_shell` | 中等 | ❌ | ✅ | 执行 Shell 命令，带超时限制 |
-| `run_tests` | 安全 | ❌ | ✅ | 执行测试套件（反馈闭环的入口） |
-| `git_diff` | 安全 | ❌ | ✅ | 查看 Git 工作区变更 |
-| `git_commit` | 危险 | ❌ | ✅ | 提交代码（触发护栏 + HITL） |
-
-### 3. 护栏 + 人工审批（HITL）
-
-护栏系统在执行前拦截危险操作：
-- 内置模式：`rm -rf`、`DROP TABLE`、`git push --force`、`npm publish`、`chmod 777`、磁盘格式化
-- 人工审批（HITL）状态机：`running → blocked → waiting_user → approved/rejected → running`
-- 可通过 `.harness/config.yaml` 配置自定义拦截命令
-
-### 4. 反馈闭环（核心贡献）
-
-反馈闭环是核心创新——自动化的测试驱动迭代：
-1. **TestRunner** 执行测试套件
-2. **ResultParser** 从测试输出中提取结构化失败数据（Jest/Vitest 插件）
-3. **FailureClassifier** 分类失败类型（语法 / 断言 / 超时 / 运行时）并排序优先级
-4. **FixSuggestionBuilder** 构建结构化修复上下文
-5. **FeedbackLoop** 编排流水线，将结果注入 LLM 上下文
-
-### 5. 记忆系统
-
-跨会话知识存储：
-- SQLite 持久化存储
-- 四种记忆类型：约定（convention）、决策（decision）、知识（knowledge）、规则（rule）
-- 关键词搜索与相关性排序
-- 按项目隔离
-
-### 6. 配置系统
-
-声明式 YAML 配置（`.harness/config.yaml`）：
-- `maxIterations`、`testCommand`、`allowedTools`、`blockedCommands`、`ignoredPaths`
-- 默认值 + 用户覆盖
-- 加载时自动校验
-
----
-
-## 目录结构
-
+```powershell
+npm.cmd run test --workspace @harness/core -- test/demo
+npm.cmd run test --workspace @harness/server -- test/demo
 ```
+
+## 凭据边界
+
+本地模式提供两种真实 LLM 凭据路径：
+
+1. **本地 BYOK 会话**：Key 由本地浏览器交给本地服务端，只存在于当前组件/请求生命周期；不写入浏览器持久存储、URL、日志或会话记录。
+2. **记住在此设备**：Key 交给当前操作系统账户的凭据库。应用不回显 Key；凭据库不可用时不会创建替代文件，仍可选择“仅本次使用”。
+
+无需设置 Harness 主密码。不要把 API Key 写入环境文件或 Git；`DEEPSEEK_API_KEY` 仍是显式本地运行时配置来源。
+
+## 运行模式能力
+
+| 能力 | `public` | `local` |
+| --- | --- | --- |
+| 固定确定性场景 | 是 | 可选 |
+| 真实 LLM | 否 | 是，需本地凭据 |
+| BYOK | 禁用 | 本地会话内存 |
+| 系统凭据库 | 禁用 | 当前操作系统账户 |
+| 文件/Shell/测试/Git 工具 | 进程工具禁用 | 完整工具集，受治理约束 |
+| 推荐监听地址 | `127.0.0.1` 用于验证 | `127.0.0.1`，不得外露 |
+
+## 项目结构
+
+```text
 packages/
-├── core/
-│   ├── src/
-│   │   ├── types.ts              # 所有共享 TypeScript 接口
-│   │   ├── index.ts              # 统一导出
-│   │   ├── llm/                  # LLM 抽象层
-│   │   │   ├── adapter.ts        # LLMAdapter 接口
-│   │   │   ├── mock.ts           # MockLLMAdapter（确定性测试）
-│   │   │   ├── deepseek.ts       # DeepSeekAdapter（真实 API）
-│   │   │   └── response-parser.ts # 响应解析
-│   │   ├── tools/                # 工具系统
-│   │   │   ├── tool.ts           # ToolRegistry
-│   │   │   ├── read-file.ts
-│   │   │   ├── write-file.ts
-│   │   │   ├── execute-shell.ts
-│   │   │   ├── run-tests.ts
-│   │   │   ├── search-code.ts
-│   │   │   ├── git-diff.ts
-│   │   │   └── git-commit.ts
-│   │   ├── guardrail/            # 安全 + HITL
-│   │   │   ├── guardrail.ts      # 命令模式匹配
-│   │   │   ├── hitl.ts           # HITL 状态机
-│   │   │   └── index.ts          # GovernanceService
-│   │   ├── feedback/             # 反馈闭环（核心贡献）
-│   │   │   ├── test-runner.ts
-│   │   │   ├── result-parser.ts
-│   │   │   ├── failure-classifier.ts
-│   │   │   ├── fix-suggestion.ts
-│   │   │   ├── feedback-loop.ts
-│   │   │   └── index.ts
-│   │   ├── memory/               # 记忆系统
-│   │   │   └── memory-store.ts
-│   │   ├── config/               # 配置
-│   │   │   └── config-loader.ts
-│   │   └── loop/                 # Agent 主循环
-│   │       ├── agent-loop.ts
-│   │       ├── context-builder.ts
-│   │       ├── stop-condition.ts
-│   │       └── session-store.ts
-│   └── test/                     # 278 个测试
-│       ├── llm/
-│       ├── tools/
-│       ├── guardrail/
-│       ├── feedback/
-│       ├── memory/
-│       ├── config/
-│       ├── loop/
-│       └── demo/
-├── server/
-│   ├── src/
-│   │   ├── server.ts             # Express 应用
-│   │   ├── routes/
-│   │   │   ├── agent.ts          # POST /api/agent/run + SSE
-│   │   │   ├── session.ts        # GET /api/sessions
-│   │   │   └── config.ts         # API Key 管理
-│   │   └── sse/
-│   │       └── sse-manager.ts    # SSE 连接管理
-│   └── client/                   # React 前端
-│       ├── src/
-│       │   ├── App.tsx
-│       │   ├── components/
-│       │   │   ├── ChatPanel.tsx
-│       │   │   ├── ToolCallCard.tsx
-│       │   │   ├── GuardrailDialog.tsx
-│       │   │   ├── FeedbackTimeline.tsx
-│       │   │   └── SessionHistory.tsx
-│       │   └── hooks/
-│       │       └── useSSE.ts
-│       └── vite.config.ts
-└── cli/
-    └── src/
-        └── cli.ts                # CLI 入口
+  core/    Agent 主循环、工具、治理、反馈、记忆、配置和 LLM 适配
+  server/  Express API、SSE、React WebUI 和凭据生命周期
+  cli/     安装后解析 Server 包并启动本地 WebUI
+scripts/
+  check-document-consistency.mjs
 ```
 
----
+记忆数据库由 `sql.js` 提供 SQLite 语义，按项目路径隔离。服务器的本地工作区和 session 由服务端创建，客户端不能提交任意 `workingDir`。
 
-## 安全
+## 验证命令
 
-### 运行模式
-
-Harness 支持两种运行模式，通过 `HARNESS_MODE` 环境变量控制：
-
-| 模式 | 值 | 说明 |
-|------|-----|------|
-| **公开安全模式** | `public` | 托管的确定性安全演示，仅启用 `demo`；不接收、存储或使用 API Key，无法执行 Shell/Git/进程测试 |
-| **本地可信模式** | `local` | 完整工具集，支持服务器凭据管理，可执行 Shell/Git/进程测试 |
-
-`HARNESS_MODE` 未设置或设置为无效值时，默认解析为 `public` 模式。
-
-### 模式能力对比
-
-| 能力 | 公网演示（`demo`） | 本地“使用自己的 API Key”（`byok`） | 本地“本地服务器凭据”（`server`） |
-|------|-------------------|-------------------------------------|------------------------------------|
-| 运行位置 | 托管公网 WebUI | 本机完整项目（`localhost` 或 `127.0.0.1`） | 本机完整项目（`localhost` 或 `127.0.0.1`） |
-| 真实 LLM | ❌ | ✅ | ✅ |
-| 接收、存储或使用 API Key | ❌ | 本地用户在当前运行中提供 | 本地配置的服务器凭据 |
-| `read_file`、`write_file`、`search_code` | ✅ | ✅ | ✅ |
-| `execute_shell`、`run_tests`、`git_diff`、`git_commit` | ❌ | ✅ | ✅ |
-| 本地配置页 | 仅显示本地运行说明，不请求配置 API | ✅ | ✅ |
-
-公网页面会显示三个体验入口，但 `byok` 与 `server` 始终禁用并说明必须在本地运行完整项目；服务器仍是权限的最终裁决者。
-
-### 本地 API 使用与凭据
-
-本地用户可选择“使用自己的 API Key”，也可选择“本地服务器凭据”。前者只在本地会话的浏览器内存中使用，不写入 localStorage、sessionStorage、URL、日志、分析工具或全局状态，也不会在错误提示中回显；后者可由本地用户在配置页配置、更新和清除。
-
-### 公开演示的特殊行为
-
-公开演示模式使用服务器内置的确定性场景运行器，不调用真实 LLM、不执行任何子进程：
-- 演示过程完全在服务端进程内执行
-- 展示安全文件写入、危险操作拦截、护栏反馈修正等核心机制
-- 所有事件使用结构化 allowlist 投影，确保任意格式用户输入不回显
-
-### 环境变量
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `HARNESS_MODE` | `public` | 运行模式：`public` 或 `local` |
-| `HARNESS_WORKSPACE_ROOT` | 系统临时目录 | 服务器拥有的工作区根目录，客户端不可选择 |
-| `PORT` | `3000` | HTTP 监听端口 |
-| `HOST` | `0.0.0.0` | HTTP 监听地址 |
-| `DEEPSEEK_API_KEY` | — | 服务端 DeepSeek API Key（本地模式） |
-| `HARNESS_TRUST_PROXY` | `0` | 反向代理信任配置 |
-| `RATE_LIMIT_MAX` | `20` | 每小时每 IP 最大运行尝试次数 |
-| `RATE_LIMIT_WINDOW` | `3600000` | 速率限制窗口（毫秒） |
-| `CONCURRENT_MAX` | `2` | 每 IP 最大并发运行数 |
-
-### 网络流
-
-```
-POST /api/agent/sessions          → { sessionId, mode, capabilities, expiresAt }
-GET  /api/agent/stream/:sessionId → SSE 事件流（等待连接打开后）
-POST /api/agent/run               → { sessionId, task, mode, apiKey? }
+```powershell
+npm.cmd run check:docs
+npm.cmd run test:docs
+npm.cmd test
+npm.cmd run build
 ```
 
-严格顺序：session 创建 → SSE 连接 → 运行提交。客户端不生成 session ID，不发送 workingDir。
+文档检查只扫描 `README.md`、`SPEC.md`、`PLAN.md`、`SPEC_PROCESS.md` 和 `AGENT_LOG.md`，不会把检查器源码或过程附件误当成产品文档。
 
-`apiKey` 仅在本地 `byok` 会话中允许；公网 `public` 会话只允许 `demo`，不会接受 API Key。
+## Windows 限制与安装证据
 
-### 威胁模型
+- PowerShell 执行策略可能阻止 `npm.ps1`；使用 `npm.cmd`。
+- 部分 Agent Shell 命令仍假设类 Unix 命令和路径；需要这些命令时优先使用 Git Bash 或 WSL，并先审查命令。
+- CLI 的自动打开浏览器依赖桌面环境；无图形界面时可手动访问回环地址。
+- Task 4 的用户人工干净安装验证成功：安装增加 90 个包；已安装 CLI/Server/Client 入口存在；`/api/health` 返回 200 且模式为 local；`/` 返回 200；停止后未发现监听进程。
+- 上述人工结果不等于自动化 Windows 清理验证。仓库中的完整 clean-install 自动测试在受限运行中没有形成已闭合、可重复的成功证据；自动化进程清理仍属于未核验间隙。
 
-- **范围内**：从文件系统窃取凭据、日志泄露、Git 暴露、浏览器 XSS 读取 Key、CSRF 未授权运行
-- **范围外**：内存扫描、内核级攻击、依赖供应链攻击、Windows 同账户恶意进程（非远程公开威胁模型）
+## 安全说明
 
-### 凭据存储（本地模式）
+- 危险工具由注册元数据与命令内容共同治理；批准绑定到不可变动作且只能消费一次。
+- 公开演示事件使用结构化 allowlist 投影，避免回显任意输入。
+- 不要提交真实 Key、`.env` 或凭据文件。
+- 不要把本地可信模式暴露给其他用户或不受信网络。
 
-本地服务器凭据使用主密码保护的加密文件存储：
-- **加密文件**：`~/.harness/credentials.enc`（文件权限尽量限制为仅当前用户可读写）
-- **密钥派生**：主密码通过 `scrypt` 派生 AES-256-GCM 密钥；每个文件使用随机 salt、IV 和 verifier
-- **生命周期**：首次设置或迁移旧文件时输入 API Key 与至少 12 个字符的主密码；重启后先解锁，使用后可锁定、更新或清除
-- **环境变量**：`DEEPSEEK_API_KEY` 仅作为显式部署配置来源，不写入凭据文件
+## 文件保留与导出
 
-忘记主密码无法恢复加密文件中的 API Key；请重新配置凭据。旧版机器派生密钥文件不会自动解密，必须重新输入 API Key 和主密码。
+任务工作区是临时空间。“导出全部产物”会验证本次会话记录的每个文件，并原子写入 `.harness/outputs/<session-id>/`；`manifest.json` 保存路径、大小与 SHA-256，后台回收不会删除导出副本。
 
-本地服务器凭据绝不会：
-- 硬编码在源代码中
-- 写入日志或未加密文件
-- 包含在 Git 提交中
-- 在 API 响应中暴露（状态端点仅返回 `hasKey: boolean`）
+保存接口为 `POST /api/agent/sessions/:sessionId/save`，请求体为空对象。它导出完整会话清单，并拒绝路径穿越、符号链接、摘要不匹配及覆盖既有导出。`public` 模式不提供持久化。
 
----
+导出后可选择“预览并应用到项目”。系统先展示创建/替换路径与文本内容；替换现有文件标记为危险操作。批准令牌绑定清单摘要与目标路径集合、只能消费一次，导出内容变化后必须重新预览。
 
-## 部署
-
-### Docker（托管公网演示）
-
-```bash
-# 构建并运行托管的确定性演示。它不接收、存储或使用 API Key。
-docker build -t harness .
-docker run -d -p 3000:3000 \
-  -e NODE_ENV=production \
-  -e HARNESS_MODE=public \
-  harness
-```
-
-### Docker Compose（带自动重启）
-
-```yaml
-version: '3'
-services:
-  harness:
-    build: .
-    ports:
-      - "3000:3000"
-    environment:
-      - NODE_ENV=production
-      - HARNESS_MODE=public
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-```
-
-### 阿里云 ECS
-
-1. 远程桌面登录到 Windows ECS 实例
-2. 从 `https://nodejs.org` 安装 Node.js 22+
-3. `git clone https://github.com/Sherryicecream/CodingAgentHarness.git`
-4. `cd CodingAgentHarness && npm install && npm run build`
-5. `cd packages/server && NODE_ENV=production npm start`
-6. 配置安全组：入方向开放 3000 端口
-7. 访问 `http://47.98.97.255:3000`
-
----
-
-## 技术栈
-
-| 层 | 技术 |
-|-------|-----------|
-| 语言 | TypeScript（严格模式） |
-| 运行时 | Node.js 18+ |
-| Web 服务器 | Express 4 |
-| 前端 | React 19 + Vite |
-| LLM | DeepSeek（兼容 OpenAI 格式） |
-| 数据库 | SQLite（通过 sql.js） |
-| 测试框架 | Vitest |
-| 构建工具 | tsup |
-| 部署 | 阿里云 ECS（Docker） |
-| 包管理 | npm workspaces |
-
----
-
-## 已知限制
-
-1. **Windows Server 部署**：本项目为类 Unix 环境开发。在 Windows Server 上，请确保已安装 Node.js 22+ 且 Vite 前端构建成功。`npm run build` 命令会同时构建后端和前端。
-2. **托管与本地边界**：托管的公网 `public` 模式仅用于 `demo` 演示；本地可信 `local` 模式必须绑定到回环地址，且不得暴露到公网。
-3. **测试解析器范围**：反馈闭环的 ResultParser 支持 Jest 和 Vitest 输出格式。其他测试框架（pytest、go test）需要自定义插件。
-4. **单用户模式**：Harness 设计为单用户、单项目使用。不支持多租户或并发会话隔离。
-5. **Windows 路径**：部分 Shell 命令假定 Unix 风格路径。在 Windows 上，建议使用 Git Bash 或 WSL 以获得完整兼容性。
+线上 WebUI 使用 `npm run build:static-demo` 生成纯静态机制演示，可托管于 GitHub Pages，无需部署服务器或配置秘密。真实 LLM、系统凭据库与完整工具只在 loopback 本地版启用。

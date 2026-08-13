@@ -7,6 +7,7 @@ export interface WorkspaceStats {
   readonly dev: bigint;
   readonly ino: bigint;
   isDirectory(): boolean;
+  isFile(): boolean;
   isSymbolicLink(): boolean;
 }
 
@@ -50,6 +51,7 @@ export interface WorkspaceManager {
     content: string,
     signal?: AbortSignal,
   ): Promise<void>;
+  saveIssuedFile(sessionId: string, filePath: string, projectRoot: string): Promise<string>;
   remove(sessionId: string): Promise<void>;
 }
 
@@ -513,6 +515,48 @@ export const createWorkspaceManager = (
       const target = resolve(join(workspace.path, filePath));
       assertDirectChild(workspace.path, target);
       commitDirectChild(root, workspace, target, content, signal);
+    },
+
+    async saveIssuedFile(sessionId, filePath, projectRoot) {
+      assertValidSessionId(sessionId);
+      if (typeof projectRoot !== 'string' || !isAbsolute(projectRoot)) {
+        throw new Error('Project root must be absolute');
+      }
+      if (typeof filePath !== 'string' || filePath.length === 0 || isAbsolute(filePath)
+        || basename(filePath) !== filePath || /[\\/]/.test(filePath) || filePath === '.') {
+        throw new Error('Workspace file must be a direct child file name');
+      }
+      const root = await getCanonicalRoot();
+      const workspace = await assertIssuedWorkspace(sessionId, root);
+      const source = resolve(join(workspace.path, filePath));
+      assertDirectChild(workspace.path, source);
+      const sourceStats = await fs.lstat(source, { bigint: true });
+      if (sourceStats.isSymbolicLink() || !sourceStats.isFile()) {
+        throw new Error('Workspace source must be a regular file');
+      }
+      const canonicalProject = resolve(await fs.realpath(projectRoot));
+      const harnessDir = resolve(join(canonicalProject, '.harness'));
+      const outputsDir = resolve(join(harnessDir, 'outputs'));
+      await fs.mkdir(outputsDir, { recursive: true, mode: 0o700 });
+      if (resolve(await fs.realpath(outputsDir)) !== outputsDir) {
+        throw new Error('Output directory must not be a symbolic link');
+      }
+      const destination = resolve(join(outputsDir, filePath));
+      if (dirname(destination) !== outputsDir) throw new Error('Invalid output path');
+      try {
+        const existing = await fs.lstat(destination, { bigint: true });
+        if (existing.isSymbolicLink() || !existing.isFile()) throw new Error('Output target is unsafe');
+      } catch (error) {
+        if (errorCode(error) !== 'ENOENT') throw error;
+      }
+      await nodeFs.copyFile(source, destination, nodeFs.constants.COPYFILE_EXCL).catch(async (error) => {
+        if (errorCode(error) === 'EEXIST') {
+          await nodeFs.copyFile(source, destination);
+          return;
+        }
+        throw error;
+      });
+      return destination;
     },
 
     async remove(sessionId) {

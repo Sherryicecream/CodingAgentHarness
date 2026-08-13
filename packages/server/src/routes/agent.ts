@@ -27,6 +27,10 @@ import {
   type SessionRegistry,
 } from '../session/session-registry.js';
 import type { SSEEvent, SSEManager } from '../sse/sse-manager.js';
+import type { WorkspaceManager } from '../session/workspace-manager.js';
+import { exportArtifacts } from '../session/artifact-exporter.js';
+import { createProjectChangeApplier } from '../session/project-change-applier.js';
+import { join } from 'node:path';
 
 const DEFAULT_RUN_RATE_WINDOW_MS = 60 * 60 * 1_000;
 const DEFAULT_RUN_RATE_LIMIT = 20;
@@ -53,6 +57,8 @@ export interface AgentRouterDependencies {
   readonly abortTimeoutMs?: number;
   readonly historySaveTimeoutMs?: number;
   readonly workspaceRoot?: string;
+  readonly projectRoot?: string;
+  readonly workspaceManager?: WorkspaceManager;
 }
 
 export interface ActiveExpiryResult {
@@ -174,6 +180,9 @@ export const createAgentRouter = (
     providerStatus?: number;
   }
   const activeRuns = new Map<string, ActiveRun>();
+  const projectChangeApplier = dependencies.projectRoot
+    ? createProjectChangeApplier({ projectRoot: dependencies.projectRoot })
+    : undefined;
   const emit = (sessionId: string, type: SSEEvent['type'], data: unknown): void => {
     dependencies.sseManager.push(sessionId, { type, data, timestamp: now() });
   };
@@ -430,6 +439,7 @@ export const createAgentRouter = (
           allowHttpByok: dependencies.policy.allowHttpByok,
         },
         workspaceRoot: dependencies.workspaceRoot ?? null,
+        workspaceRetention: session.retention,
         expiresAt: session.expiresAt.toISOString(),
       });
     } catch {
@@ -507,6 +517,7 @@ export const createAgentRouter = (
         task: input.task,
         mode: input.mode,
         apiKey: input.apiKey,
+        artifactTracker: dependencies.sessionRegistry.getArtifactTracker(session.id, clientKey),
         emit: emitWhileActive,
       }));
     } catch {
@@ -525,6 +536,84 @@ export const createAgentRouter = (
     observeCompletion(active, active.handle.completion);
 
     res.status(202).json({ sessionId: session.id, status: 'started' });
+  });
+
+  router.post('/sessions/:sessionId/save', async (req: Request, res: Response) => {
+    if (dependencies.policy.mode !== 'local' || !dependencies.workspaceManager || !dependencies.projectRoot) {
+      res.status(403).json({ error: 'PERSISTENCE_DISABLED' });
+      return;
+    }
+    const sessionId = req.params.sessionId;
+    const clientKey = normalizeClientKey(req);
+    const session = dependencies.sessionRegistry.getAuthorized(sessionId, clientKey);
+    if (!isPlainObject(req.body) || Object.keys(req.body).length !== 0 || !session) {
+      res.status(404).json({ error: 'SESSION_NOT_FOUND' });
+      return;
+    }
+    try {
+      const result = await exportArtifacts({
+        sessionId,
+        workspace: dependencies.workspaceManager.assertIssued(sessionId, session.workspace),
+        projectRoot: dependencies.projectRoot,
+        artifacts: dependencies.sessionRegistry.listArtifacts(sessionId, clientKey),
+      });
+      res.status(201).json({ sessionId, destination: result.destination, manifest: result.manifest });
+    } catch {
+      res.status(400).json({ error: 'ARTIFACT_EXPORT_FAILED' });
+    }
+  });
+
+  router.get('/sessions/:sessionId/artifacts', (req: Request, res: Response) => {
+    try {
+      const artifacts = dependencies.sessionRegistry.listArtifacts(
+        req.params.sessionId,
+        normalizeClientKey(req),
+      );
+      res.json({ sessionId: req.params.sessionId, artifacts });
+    } catch (error) {
+      if (error instanceof SessionNotFoundError) {
+        res.status(404).json({ error: 'SESSION_NOT_FOUND' });
+        return;
+      }
+      res.status(500).json({ error: 'ARTIFACT_LIST_FAILED' });
+    }
+  });
+
+  router.post('/sessions/:sessionId/apply/preview', async (req: Request, res: Response) => {
+    const sessionId = req.params.sessionId;
+    if (dependencies.policy.mode !== 'local' || !dependencies.projectRoot || !projectChangeApplier) {
+      res.status(403).json({ error: 'PROJECT_APPLY_DISABLED' }); return;
+    }
+    if (!isPlainObject(req.body) || Object.keys(req.body).length !== 0
+      || !dependencies.sessionRegistry.getAuthorized(sessionId, normalizeClientKey(req))) {
+      res.status(404).json({ error: 'SESSION_NOT_FOUND' }); return;
+    }
+    try {
+      const preview = await projectChangeApplier.preview(join(
+        dependencies.projectRoot, '.harness', 'outputs', sessionId,
+      ));
+      res.json(preview);
+    } catch {
+      res.status(400).json({ error: 'PROJECT_PREVIEW_FAILED' });
+    }
+  });
+
+  router.post('/sessions/:sessionId/apply', async (req: Request, res: Response) => {
+    const sessionId = req.params.sessionId;
+    if (dependencies.policy.mode !== 'local' || !projectChangeApplier) {
+      res.status(403).json({ error: 'PROJECT_APPLY_DISABLED' }); return;
+    }
+    const approvalToken = isPlainObject(req.body) ? req.body.approvalToken : undefined;
+    if (typeof approvalToken !== 'string'
+      || !dependencies.sessionRegistry.getAuthorized(sessionId, normalizeClientKey(req))) {
+      res.status(404).json({ error: 'SESSION_NOT_FOUND' }); return;
+    }
+    try {
+      await projectChangeApplier.apply(approvalToken);
+      res.json({ sessionId, status: 'applied' });
+    } catch {
+      res.status(409).json({ error: 'PROJECT_APPROVAL_INVALID' });
+    }
   });
 
   router.get('/stream/:sessionId', (req: Request, res: Response) => {

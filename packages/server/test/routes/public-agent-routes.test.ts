@@ -54,6 +54,7 @@ describe('public agent request boundaries', () => {
     expect(response.body).toMatchObject({
       sessionId: 'server-issued-session',
       mode: 'public',
+      workspaceRetention: 'temporary',
       capabilities: {
         allowedExperiences: ['demo'],
         allowByok: false,
@@ -65,6 +66,15 @@ describe('public agent request boundaries', () => {
     });
     expect(response.body).toHaveProperty('workspaceRoot');
     expect(response.body).not.toHaveProperty('clientKey');
+  });
+
+  it('does not expose persistent file saving in public mode', async () => {
+    const app = await createPublicApp({ idGenerator: () => 'public-save' });
+    const response = await request(app)
+      .post('/api/agent/sessions/public-save/save')
+      .send({ fileName: 'report.txt' });
+    expect(response.status).toBe(403);
+    expect(response.body).toEqual({ error: 'PERSISTENCE_DISABLED' });
   });
 
   it('accepts session creation with no JSON body as well as an empty object', async () => {

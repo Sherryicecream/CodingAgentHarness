@@ -1,12 +1,13 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createAgentLoop, AgentLoop, AgentLoopDependencies } from '../../src/loop/agent-loop.js';
 import { MockLLMAdapter } from '../../src/llm/mock.js';
-import { createToolRegistry, ToolRegistry } from '../../src/tools/tool.js';
+import { createToolRegistry, ToolApprovalRequiredError, ToolRegistry } from '../../src/tools/tool.js';
 import { createGovernanceService, GovernanceService } from '../../src/guardrail/index.js';
 import { createContextBuilder, ContextBuilder } from '../../src/loop/context-builder.js';
 import { createStopCondition, StopCondition } from '../../src/loop/stop-condition.js';
 import { FeedbackLoop } from '../../src/feedback/feedback-loop.js';
-import { AgentResponse, Tool, ToolResult, FeedbackResult, FeedbackState } from '../../src/types.js';
+import { MemoryStore } from '../../src/memory/memory-store.js';
+import { AgentContext, AgentResponse, MemoryEntry, Tool, ToolResult, FeedbackResult, FeedbackState } from '../../src/types.js';
 
 function makeResponse(content: string, toolCalls: any[] = []): AgentResponse {
   return { content, toolCalls };
@@ -104,11 +105,78 @@ function buildDeps(overrides: Partial<AgentLoopDependencies> & {
 }): AgentLoopDependencies {
   return {
     config: { maxIterations: 20 },
+    memoryStore: createEmptyMemoryStore(),
     ...overrides,
   };
 }
 
+function createEmptyMemoryStore(): MemoryStore {
+  return {
+    add: async () => { throw new Error('not used in AgentLoop tests'); },
+    search: async () => [],
+    list: async () => [],
+    delete: async () => {},
+    getByType: async () => [],
+  };
+}
+
 describe('AgentLoop', () => {
+  describe('memory context', () => {
+    it('injects only the current project memories into the LLM request', async () => {
+      const matchingMemory: MemoryEntry = {
+        id: 'project-a-memory',
+        type: 'convention',
+        content: 'Use project memory for releases',
+        source: 'project-a',
+        projectPath: '/project/a',
+        createdAt: new Date(),
+        lastAccessedAt: new Date(),
+      };
+      const otherProjectMemory: MemoryEntry = {
+        ...matchingMemory,
+        id: 'project-b-memory',
+        content: 'Do not expose project B deployment details',
+        source: 'project-b',
+        projectPath: '/project/b',
+      };
+      const search = vi.fn(async (projectPath: string, query: string) => {
+        if (projectPath === '/project/a' && query === 'Use project memory') {
+          return [matchingMemory];
+        }
+        return [otherProjectMemory];
+      });
+      const memoryStore = {
+        ...createEmptyMemoryStore(),
+        search,
+      } as unknown as MemoryStore;
+      const contexts: AgentContext[] = [];
+      const llm = {
+        async sendMessage(context: AgentContext): Promise<AgentResponse> {
+          contexts.push(context);
+          return makeResponse('TASK_COMPLETE');
+        },
+      };
+
+      const loop = createAgentLoop(buildDeps({
+        llm,
+        tools: createToolRegistry(),
+        governance: createGovernanceService(),
+        feedback: makeMockFeedbackLoop(),
+        contextBuilder: createContextBuilder(),
+        stopCondition: createStopCondition(),
+        memoryStore,
+      }));
+
+      await loop.run('Use project memory', '/project/a');
+
+      expect(search).toHaveBeenCalledWith('/project/a', 'Use project memory', { limit: 10 });
+      expect(contexts[0]!.messages.map((message) => message.content).join('\n'))
+        .toContain('Use project memory for releases');
+      expect(contexts[0]!.messages.map((message) => message.content).join('\n'))
+        .not.toContain('project B deployment details');
+    });
+  });
+
   // ── Test 1: Simple task — LLM responds with TASK_COMPLETE, loop ends with "completed" ──
   describe('simple task completion', () => {
     it('should complete when LLM responds with TASK_COMPLETE', async () => {
@@ -304,7 +372,7 @@ describe('AgentLoop', () => {
       expect(result.session.toolCalls).toHaveLength(0);
     });
 
-    it('should allow safe commands through guardrail', async () => {
+    it('should require approval for a harmless command from a dangerous tool', async () => {
       const llm = new MockLLMAdapter([
         makeResponse('I will list files. TASK_COMPLETE', [
           makeToolCall('call_1', 'execute_shell', { command: 'ls -la' }),
@@ -321,8 +389,9 @@ describe('AgentLoop', () => {
 
       const result = await loop.run('List files', '/tmp/test');
 
-      expect(result.status).toBe('completed');
-      expect(result.session.toolCalls).toHaveLength(1);
+      expect(result.status).toBe('blocked');
+      expect(result.session.toolCalls).toHaveLength(0);
+      expect(governance.hitl.state).toBe('waiting_user');
     });
   });
 
@@ -388,6 +457,72 @@ describe('AgentLoop', () => {
 
   // ── Additional tests: abort and handleApproval ──
   describe('abort', () => {
+    it('does not request approval after aborting from the running event', async () => {
+      let executions = 0;
+      const dangerousTool = makeDangerousTool();
+      const tools = createToolRegistry();
+      tools.register({
+        ...dangerousTool,
+        async execute(params) {
+          executions += 1;
+          return dangerousTool.execute(params);
+        },
+      });
+      const governance = createGovernanceService({ blockedCommands: [] });
+      let loop!: AgentLoop;
+      loop = createAgentLoop({
+        ...buildDeps({
+          llm: new MockLLMAdapter([makeResponse('Approval is required.', [
+            makeToolCall('abort-running', 'execute_shell', { command: 'echo hello' }),
+          ])]),
+          tools,
+          governance,
+          feedback: makeMockFeedbackLoop(),
+          contextBuilder: createContextBuilder(),
+          stopCondition: createStopCondition(),
+        }),
+        onEvent(type, data) {
+          if (type === 'tool_call' && data.status === 'running') {
+            loop.abort();
+          }
+        },
+      });
+
+      const result = await loop.run('Abort before authorization', '/tmp/test');
+
+      expect(result.status).toBe('failed');
+      expect(executions).toBe(0);
+      expect(governance.hitl.state).toBe('running');
+      expect(governance.hitl.pendingAction).toBeNull();
+      await expect(loop.continueAfterApproval(true)).rejects.toThrow(
+        'Agent loop has no blocked action to continue',
+      );
+    });
+
+    it('clears an approved action that aborts before execution', async () => {
+      const tools = createToolRegistry();
+      tools.register(makeDangerousTool());
+      const governance = createGovernanceService({ blockedCommands: [] });
+      const loop = createAgentLoop(buildDeps({
+        llm: new MockLLMAdapter([makeResponse('Approval is required.', [
+          makeToolCall('abort-approved', 'execute_shell', { command: 'echo hello' }),
+        ])]),
+        tools,
+        governance,
+        feedback: makeMockFeedbackLoop(),
+        contextBuilder: createContextBuilder(),
+        stopCondition: createStopCondition(),
+      }));
+
+      await loop.run('Require approval then abort', '/tmp/test');
+      governance.hitl.approve();
+      loop.abort();
+
+      await expect(tools.execute('execute_shell', { command: 'echo hello' }, {
+        toolCallId: 'abort-approved',
+      })).rejects.toThrow(ToolApprovalRequiredError);
+    });
+
     it('should abort the loop mid-execution', async () => {
       const llm = new MockLLMAdapter([
         makeResponse('Processing...', [

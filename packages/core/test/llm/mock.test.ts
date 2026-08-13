@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { MockLLMAdapter, MockLLMExhaustedError } from '../../src/llm/mock.js';
 import { AgentResponse } from '../../src/types.js';
 
@@ -129,5 +129,28 @@ describe('MockLLMAdapter', () => {
       feedbackState: null,
     });
     expect(adapter.remainingCount).toBe(0);
+  });
+
+  it('hides feedback state from a selector while recording the full received context', async () => {
+    const context = {
+      messages: [{ role: 'system' as const, content: 'Structured feedback: {}' }],
+      tools: [],
+      memory: [],
+      config: { maxIterations: 10, testCommand: '', allowedTools: [], blockedCommands: [], ignoredPaths: [] },
+      feedbackState: {
+        iteration: 1,
+        lastResult: { status: 'fail' as const, failures: [], actionableFix: null },
+      },
+    };
+    const selector = vi.fn((request) => {
+      expect('feedbackState' in request).toBe(false);
+      return makeResponse(request.messages[0]!.content);
+    });
+    const adapter = new MockLLMAdapter(selector);
+
+    await expect(adapter.sendMessage(context)).resolves.toMatchObject({
+      content: 'Structured feedback: {}',
+    });
+    expect(adapter.receivedContexts).toEqual([context]);
   });
 });

@@ -1,7 +1,7 @@
-import { GuardrailDecision, ToolCallRequest } from '../types.js';
+import { GuardrailDecision, RiskLevel, ToolCallRequest } from '../types.js';
 
 export interface Guardrail {
-  check(toolCall: ToolCallRequest): GuardrailDecision;
+  check(toolCall: ToolCallRequest, riskLevel?: RiskLevel): GuardrailDecision;
   addPattern(pattern: RegExp, description: string): void;
 }
 
@@ -39,7 +39,11 @@ export function createGuardrail(config?: { blockedCommands?: string[] }): Guardr
   }
 
   return {
-    check(toolCall: ToolCallRequest): GuardrailDecision {
+    check(toolCall: ToolCallRequest, riskLevel?: RiskLevel): GuardrailDecision {
+      if (riskLevel === 'dangerous') {
+        return 'blocked';
+      }
+
       // Collect all string arguments to check for dangerous patterns
       const args = toolCall.arguments || {};
       const commandStr = args.command ? String(args.command) : '';

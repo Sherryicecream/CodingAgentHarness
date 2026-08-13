@@ -9,11 +9,12 @@ import type {
   ToolCallRequest,
 } from '../types.js';
 import type { LLMAdapter } from '../llm/adapter.js';
-import type { ToolRegistry } from '../tools/tool.js';
+import { ToolApprovalRequiredError, type ToolRegistry } from '../tools/tool.js';
 import type { GovernanceService } from '../guardrail/index.js';
 import type { FeedbackLoop } from '../feedback/feedback-loop.js';
 import type { ContextBuilder } from './context-builder.js';
 import type { StopCondition } from './stop-condition.js';
+import type { MemoryStore } from '../memory/memory-store.js';
 import { parseResponse } from '../llm/response-parser.js';
 
 export interface AgentLoopDependencies {
@@ -23,6 +24,7 @@ export interface AgentLoopDependencies {
   feedback: FeedbackLoop;
   contextBuilder: ContextBuilder;
   stopCondition: StopCondition;
+  memoryStore: MemoryStore;
   config: { maxIterations: number };
   onEvent?: (type: string, data: any) => void;
 }
@@ -60,7 +62,10 @@ const isTestCommand = (command: string): boolean => {
     || /^(npx|npm)\s+(test|vitest|jest|run test)/.test(lower);
 };
 
+const MAX_CONTEXT_MEMORIES = 10;
+
 export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
+  deps.tools.setGovernance(deps.governance);
   let aborted = false;
   const abortController = new AbortController();
   let currentState: ExecutionState | null = null;
@@ -93,9 +98,9 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
   const executeToolCall = async (
     state: ExecutionState,
     toolCall: ToolCallRequest,
-    approvedByUser: boolean,
   ): Promise<void> => {
     const startTime = Date.now();
+    const approvedByUser = deps.governance.isApprovedAction(toolCall);
     let result;
     try {
       deps.onEvent?.('tool_call', {
@@ -103,8 +108,16 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
         arguments: toolCall.arguments,
         status: 'running',
       });
-      result = await deps.tools.execute(toolCall.name, toolCall.arguments);
+      if (aborted) {
+        return;
+      }
+      result = await deps.tools.execute(toolCall.name, toolCall.arguments, {
+        toolCallId: toolCall.id,
+      });
     } catch (error: any) {
+      if (error instanceof ToolApprovalRequiredError) {
+        throw error;
+      }
       result = { success: false, output: '', error: error.message };
     }
     if (aborted) {
@@ -171,25 +184,26 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
 
   const drive = async (
     state: ExecutionState,
-    approvedPendingAction = false,
   ): Promise<AgentLoopResult> => {
     while (!aborted) {
       let response: AgentResponse;
       let parsed: ReturnType<typeof parseResponse>;
       let firstToolIndex = 0;
-      let bypassGuardrail = false;
 
       if (state.pending) {
         ({ response, parsed, toolIndex: firstToolIndex } = state.pending);
         state.pending = null;
-        bypassGuardrail = approvedPendingAction;
-        approvedPendingAction = false;
       } else {
+        const memories = await deps.memoryStore.search(
+          state.workingDir,
+          state.task,
+          { limit: MAX_CONTEXT_MEMORIES },
+        );
         const context = deps.contextBuilder.build({
           task: state.task,
           messages: state.messages,
           tools: deps.tools.list(),
-          memories: [],
+          memories,
           config: deps.config as any,
           feedbackState: state.feedbackState,
         });
@@ -215,13 +229,16 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
           return finish(state, 'failed');
         }
         const toolCall = response.toolCalls[index]!;
-        const approvedByUser = bypassGuardrail && index === firstToolIndex;
-        if (!approvedByUser && !deps.governance.preCheck(toolCall)) {
+        try {
+          await executeToolCall(state, toolCall);
+        } catch (error) {
+          if (!(error instanceof ToolApprovalRequiredError)) {
+            throw error;
+          }
           state.pending = { response, parsed, toolIndex: index };
           deps.onEvent?.('guardrail', { toolCall, decision: 'blocked' });
           return finish(state, 'blocked');
         }
-        await executeToolCall(state, toolCall, approvedByUser);
         if (aborted) {
           return finish(state, 'failed');
         }
@@ -278,8 +295,7 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
         return finish(state, 'failed');
       }
       deps.governance.hitl.approve();
-      deps.governance.hitl.reset();
-      return drive(state, true);
+      return drive(state);
     },
 
     handleApproval(approved) {
@@ -291,6 +307,7 @@ export function createAgentLoop(deps: AgentLoopDependencies): AgentLoop {
     abort() {
       aborted = true;
       abortController.abort();
+      deps.governance.hitl.reset();
     },
   };
 }

@@ -8,11 +8,10 @@ import type { CredentialStore } from '../../src/credential-store.js';
 import { PUBLIC_RUNTIME_POLICY } from '../../src/security/runtime-policy.js';
 
 const emptyCredentialStore: CredentialStore = {
-  hasKey: () => false,
+  status: () => ({ storage: 'keyring', hasKey: false }),
   getKey: () => null,
   setKey: () => undefined,
-  deleteKey: () => undefined,
-  listServices: () => [],
+  deleteKey: () => false,
 };
 
 const input: AgentRunInput = {
@@ -20,6 +19,7 @@ const input: AgentRunInput = {
     id: 'lazy-session',
     clientKey: 'client',
     workspace: 'server-owned-workspace',
+    retention: 'temporary',
     status: 'running',
     createdAt: new Date('2026-08-08T00:00:00.000Z'),
     expiresAt: new Date('2026-08-08T01:00:00.000Z'),
@@ -90,4 +90,5 @@ describe('default agent run lazy privileged boundary', () => {
     expect(approve).toHaveBeenCalledWith(true);
     expect(continueAfterApproval).toHaveBeenCalledTimes(1);
   });
+
 });

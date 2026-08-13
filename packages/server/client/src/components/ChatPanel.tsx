@@ -5,6 +5,7 @@ import { ToolCallCard } from './ToolCallCard.js';
 import { GuardrailDialog } from './GuardrailDialog.js';
 import { FeedbackTimeline } from './FeedbackTimeline.js';
 import { appendPublicSession, type PublicSessionHistory } from '../history/public-history.js';
+import { ArtifactExport } from './ArtifactExport.js';
 
 interface BrowserSecurityInfo {
   isSecureContext: boolean;
@@ -25,8 +26,8 @@ export const isByokBrowserAllowed = (info: BrowserSecurityInfo): boolean => (
 
 const experienceLabel = (experience: RuntimeExperience): string => {
   if (experience === 'demo') return '安全演示';
-  if (experience === 'byok') return '使用自己的 API Key';
-  return '本地服务器凭据';
+  if (experience === 'byok') return '仅本次使用';
+  return '记住在此设备';
 };
 
 const defaultExperience = (runtime: RuntimeSession): RuntimeExperience => (
@@ -295,7 +296,7 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
 
       {!byokAllowed && !runtimeInfo.capabilities.allowHttpByok && runtimeInfo.capabilities.allowByok && (
         <p className="security-notice" role="note">
-          使用自己的 API Key 需要 HTTPS；仅 localhost、127.0.0.1 和 ::1 可在 HTTP 下开发调试。
+          仅本次使用 需要 HTTPS；仅 localhost、127.0.0.1 和 ::1 可在 HTTP 下开发调试。
         </p>
       )}
 
@@ -542,6 +543,7 @@ export function ChatPanel({ runtimeInfo, acquireSession }: ChatPanelProps) {
 
       {isComplete && (
         <div className="card completion-note">
+          {runtimeInfo.mode === 'local' && sessionId && <ArtifactExport sessionId={sessionId} />}
           文件保存在隔离工作区：<code>{runtimeInfo.workspaceRoot ?? '&lt;工作区&gt;'}\{sessionId}\</code>
         </div>
       )}

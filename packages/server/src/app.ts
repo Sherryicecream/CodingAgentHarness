@@ -1,5 +1,6 @@
 import { isIP } from 'node:net';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import cors from 'cors';
 import express, { type Express } from 'express';
 import type { SessionStore } from '../../core/src/loop/session-store.js';
@@ -44,6 +45,7 @@ export type HarnessApp = Express & {
 export interface AppOptions {
   mode?: AppMode;
   workspaceRoot?: string;
+  projectRoot?: string;
   now?: () => Date;
   idGenerator?: () => string;
   fetchImpl?: typeof fetch;
@@ -66,18 +68,14 @@ export interface AppOptions {
 }
 
 const disabledCredentialStore = (): CredentialStore => ({
-  getState: () => 'empty',
-  unlock: () => false,
-  lock: () => undefined,
-  initialize: () => { throw new Error('Credential store is disabled by runtime policy'); },
-  hasKey: () => { throw new Error('Credential store is disabled by runtime policy'); },
+  status: () => ({ storage: 'unavailable', hasKey: false }),
   getKey: () => { throw new Error('Credential store is disabled by runtime policy'); },
   setKey: () => { throw new Error('Credential store is disabled by runtime policy'); },
   deleteKey: () => { throw new Error('Credential store is disabled by runtime policy'); },
-  listServices: () => { throw new Error('Credential store is disabled by runtime policy'); },
 });
 
 const MAX_TIMER_MS = 2_147_483_647;
+const clientAssetsDirectory = join(dirname(fileURLToPath(import.meta.url)), 'client');
 
 const positiveIntegerFromEnvironment = (
   name: string,
@@ -145,6 +143,7 @@ export const createApp = (options: AppOptions = {}): HarnessApp => {
   const workspaceRoot = options.workspaceRoot
     ?? process.env.HARNESS_WORKSPACE_ROOT
     ?? join(process.cwd(), '.harness-workspaces');
+  const projectRoot = options.projectRoot ?? process.cwd();
   const credentialStore = options.credentialStore ?? disabledCredentialStore();
   const sessionStore = policy.mode === 'local'
     ? options.sessionStore!
@@ -197,8 +196,10 @@ export const createApp = (options: AppOptions = {}): HarnessApp => {
     sessionStore,
     abortTimeoutMs: options.abortTimeoutMs,
     historySaveTimeoutMs: options.historySaveTimeoutMs,
-    workspaceRoot,
-  });
+      workspaceRoot,
+      projectRoot,
+      workspaceManager,
+    });
   let closed = false;
   let sweepInFlight: Promise<void> | null = null;
   let closePromise: Promise<void> | null = null;
@@ -264,9 +265,9 @@ export const createApp = (options: AppOptions = {}): HarnessApp => {
   app.get('/api/health', (_req, res) => res.json({ status: 'ok', mode: policy.mode }));
 
   if (process.env.NODE_ENV === 'production') {
-    app.use(express.static('dist/client'));
+    app.use(express.static(clientAssetsDirectory));
     app.get('*', (_req, res) => {
-      res.sendFile('dist/client/index.html', { root: '.' });
+      res.sendFile('index.html', { root: clientAssetsDirectory });
     });
   }
 

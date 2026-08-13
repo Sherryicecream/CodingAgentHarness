@@ -16,12 +16,19 @@ export class DeepSeekAdapter implements LLMAdapter {
   private apiKey: string;
   private model: string;
   private baseUrl: string;
+  private fetchImpl: typeof fetch;
   private disposed = false;
 
-  constructor(options: { apiKey: string; model?: string; baseUrl?: string }) {
+  constructor(options: {
+    apiKey: string;
+    model?: string;
+    baseUrl?: string;
+    fetchImpl?: typeof fetch;
+  }) {
     this.apiKey = options.apiKey;
     this.model = options.model ?? 'deepseek-chat';
     this.baseUrl = options.baseUrl ?? 'https://api.deepseek.com';
+    this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
   async sendMessage(context: AgentContext, signal?: AbortSignal): Promise<AgentResponse> {
@@ -63,7 +70,7 @@ export class DeepSeekAdapter implements LLMAdapter {
     };
     let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+      response = await this.fetchImpl(`${this.baseUrl}/v1/chat/completions`, {
         method: 'POST',
         signal,
         headers,

@@ -1,62 +1,55 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { createCredentialStore } from '../src/credential-store.js';
+import { describe, expect, it } from 'vitest';
+import {
+  createCredentialStore,
+  type CredentialKeyring,
+} from '../src/credential-store.js';
 
-const PASSWORD = 'correct horse battery staple';
 const KEY = 'sk-test-credential-store-sentinel';
 
-const sandboxes: string[] = [];
+class FakeKeyring implements CredentialKeyring {
+  readonly entries = new Map<string, string>();
+  unavailable = false;
 
-afterEach(() => {
-  for (const directory of sandboxes.splice(0)) rmSync(directory, { recursive: true, force: true });
-});
+  get(service: string, account: string): string | null {
+    if (this.unavailable) throw new Error('KEYRING_UNAVAILABLE');
+    return this.entries.get(`${service}/${account}`) ?? null;
+  }
 
-const makeStore = () => {
-  const directory = mkdtempSync(join(tmpdir(), 'harness-credential-test-'));
-  sandboxes.push(directory);
-  return {
-    directory,
-    filePath: join(directory, 'credentials.enc'),
-    store: createCredentialStore({ filePath: join(directory, 'credentials.enc') }),
-  };
-};
+  set(service: string, account: string, secret: string): void {
+    if (this.unavailable) throw new Error('KEYRING_UNAVAILABLE');
+    this.entries.set(`${service}/${account}`, secret);
+  }
 
-describe('master-password credential store', () => {
-  it('initializes, unlocks, reads, updates, locks, and deletes a versioned credential', () => {
-    const { filePath, store } = makeStore();
+  delete(service: string, account: string): boolean {
+    if (this.unavailable) throw new Error('KEYRING_UNAVAILABLE');
+    return this.entries.delete(`${service}/${account}`);
+  }
+}
 
-    expect(store.getState()).toBe('empty');
-    expect(() => store.initialize('short')).toThrow('MASTER_PASSWORD_TOO_SHORT');
-    store.initialize(PASSWORD);
-    expect(store.getState()).toBe('unlocked');
-    store.setKey('harness/deepseek-api-key', KEY);
-    expect(store.getKey('harness/deepseek-api-key')).toBe(KEY);
-    expect(JSON.parse(readFileSync(filePath, 'utf8')).version).toBe(2);
+describe('OS-keyring credential store', () => {
+  it('stores, updates, reads, and deletes the DeepSeek key without returning it in status', async () => {
+    const keyring = new FakeKeyring();
+    const store = createCredentialStore({ keyring });
 
-    store.lock();
-    expect(store.getState()).toBe('locked');
-    expect(store.getKey('harness/deepseek-api-key')).toBeNull();
-    expect(() => store.setKey('harness/deepseek-api-key', KEY)).toThrow('CREDENTIAL_STORE_LOCKED');
-    expect(store.unlock('wrong password')).toBe(false);
-    expect(store.unlock(PASSWORD)).toBe(true);
-    expect(store.getKey('harness/deepseek-api-key')).toBe(KEY);
-    store.deleteKey('harness/deepseek-api-key');
-    expect(store.getState()).toBe('empty');
+    expect(store.status()).toEqual({ storage: 'keyring', hasKey: false });
+    await store.setKey(KEY);
+    expect(store.getKey()).toBe(KEY);
+    expect(store.status()).toEqual({ storage: 'keyring', hasKey: true });
+    expect(JSON.stringify(await store.status())).not.toContain(KEY);
+
+    await store.setKey('sk-test-updated-sentinel');
+    expect(store.getKey()).toBe('sk-test-updated-sentinel');
+    expect(store.deleteKey()).toBe(true);
+    expect(store.getKey()).toBeNull();
   });
 
-  it('rejects invalid passwords and detects legacy files without decrypting them', () => {
-    const { filePath, store } = makeStore();
-    expect(() => store.initialize('12345678901')).toThrow('MASTER_PASSWORD_TOO_SHORT');
-    store.initialize(PASSWORD);
-    expect(store.unlock('x'.repeat(128) + 'x')).toBe(false);
+  it('reports an unavailable keyring and never creates a file fallback', async () => {
+    const keyring = new FakeKeyring();
+    keyring.unavailable = true;
+    const store = createCredentialStore({ keyring });
 
-    rmSync(filePath, { force: true });
-    // An old machine-derived store was a raw base64 payload without a JSON envelope.
-    writeFileSync(filePath, Buffer.from('legacy-ciphertext').toString('base64'));
-    const legacy = createCredentialStore({ filePath });
-    expect(legacy.getState()).toBe('legacy');
-    expect(legacy.getKey('harness/deepseek-api-key')).toBeNull();
+    expect(store.status()).toEqual({ storage: 'unavailable', hasKey: false });
+    expect(() => store.setKey(KEY)).toThrow('KEYRING_UNAVAILABLE');
+    expect(store.getKey()).toBeNull();
   });
 });

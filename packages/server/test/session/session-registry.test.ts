@@ -46,6 +46,7 @@ describe('createSessionRegistry', () => {
       id: 'server-generated-id',
       clientKey: 'client-a',
       workspace: join(root, 'server-generated-id'),
+      retention: 'temporary',
       status: 'issued',
       createdAt,
       expiresAt: new Date('2026-08-08T01:00:00.000Z'),
@@ -55,6 +56,7 @@ describe('createSessionRegistry', () => {
       'createdAt',
       'expiresAt',
       'id',
+      'retention',
       'status',
       'workspace',
     ]);
@@ -89,6 +91,55 @@ describe('createSessionRegistry', () => {
 
     currentTime = new Date('2026-08-08T01:00:00.000Z');
     expect(registry.getAuthorized(session.id, 'client-a')).toBeNull();
+  });
+
+  it.each(['completed', 'failed'] as const)(
+    'removes a %s temporary workspace on the next retention sweep',
+    async (terminalStatus) => {
+      const root = await createRoot();
+      const registry = createSessionRegistry({
+        workspaceManager: createWorkspaceManager({ root }),
+        idGenerator: () => `${terminalStatus}-temporary-session`,
+      });
+      const session = await registry.issue('client-a');
+      registry.start(session.id, 'client-a');
+      if (terminalStatus === 'completed') {
+        registry.complete(session.id, 'client-a');
+      } else {
+        registry.fail(session.id, 'client-a');
+      }
+
+      expect(await registry.sweepExpired()).toBe(1);
+      await expect(realpath(session.workspace)).rejects.toMatchObject({ code: 'ENOENT' });
+    },
+  );
+
+  it('preserves a completed workspace when explicitly requested', async () => {
+    const root = await createRoot();
+    const registry = createSessionRegistry({
+      workspaceManager: createWorkspaceManager({ root }),
+      idGenerator: () => 'saved-session',
+    });
+    const session = await registry.issue('client-a');
+    registry.start(session.id, 'client-a');
+    registry.complete(session.id, 'client-a');
+
+    expect(registry.preserve(session.id, 'client-a').retention).toBe('preserve');
+    expect(await registry.sweepExpired()).toBe(0);
+    expect(await realpath(session.workspace)).toBe(session.workspace);
+  });
+
+  it('does not remove an active workspace before its expiry boundary', async () => {
+    const root = await createRoot();
+    const registry = createSessionRegistry({
+      workspaceManager: createWorkspaceManager({ root }),
+      idGenerator: () => 'active-temporary-session',
+    });
+    const session = await registry.issue('client-a');
+    registry.start(session.id, 'client-a');
+
+    expect(await registry.sweepExpired()).toBe(0);
+    expect(await realpath(session.workspace)).toBe(session.workspace);
   });
 
   it('deterministically removes every workspace at its expiry boundary', async () => {
@@ -130,6 +181,7 @@ describe('createSessionRegistry', () => {
       create: (sessionId) => actualManager.create(sessionId),
       getIssuedPath: (sessionId) => actualManager.getIssuedPath(sessionId),
       assertIssued: (sessionId, path) => actualManager.assertIssued(sessionId, path),
+      saveIssuedFile: (sessionId, filePath, projectRoot) => actualManager.saveIssuedFile(sessionId, filePath, projectRoot),
       writeIssuedFile: (sessionId, filePath, content) => (
         actualManager.writeIssuedFile(sessionId, filePath, content)
       ),

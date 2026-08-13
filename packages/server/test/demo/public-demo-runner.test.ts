@@ -31,6 +31,7 @@ const createDemoSession = async (id: string): Promise<{
       id,
       clientKey: 'demo-client',
       workspace,
+      retention: 'temporary',
       status: 'running',
       createdAt: new Date('2026-08-08T00:00:00.000Z'),
       expiresAt: new Date('2026-08-08T01:00:00.000Z'),
@@ -61,6 +62,7 @@ const deferWriteCall = (
       create: (sessionId) => manager.create(sessionId),
       getIssuedPath: (sessionId) => manager.getIssuedPath(sessionId),
       assertIssued: (sessionId, path) => manager.assertIssued(sessionId, path),
+      saveIssuedFile: (sessionId, filePath, projectRoot) => manager.saveIssuedFile(sessionId, filePath, projectRoot),
       async writeIssuedFile(sessionId, filePath, content, signal) {
         callCount += 1;
         if (callCount === deferredCall) {
@@ -268,6 +270,7 @@ describe('public demo runner', () => {
       id,
       clientKey: 'shared-client',
       workspace: await workspaceManager.create(id),
+      retention: 'temporary',
       status: 'running',
       createdAt: new Date('2026-08-08T00:00:00.000Z'),
       expiresAt: new Date('2026-08-08T01:00:00.000Z'),

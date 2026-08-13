@@ -170,6 +170,7 @@ describe('public demo capability boundary', () => {
       bundle: true,
       format: 'esm',
       platform: 'node',
+      external: ['@napi-rs/keyring'],
       target: 'node22',
       splitting: true,
       write: false,
