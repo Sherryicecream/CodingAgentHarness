@@ -27,6 +27,11 @@ test('GitHub CI preserves triggers and verifies tests, builds, and packages', as
     ['npm ci', 'npm test', 'npm run build', 'npm run verify:packages'],
     'GitHub CI',
   );
+  assert.match(
+    config,
+    /^\s{4}if: .*github\.ref == 'refs\/heads\/master'.*$/m,
+    'GitHub Pages deployment must run from the repository default branch',
+  );
   assert.doesNotMatch(config, /npm publish|secrets\.|\brelease\b/i);
 });
 

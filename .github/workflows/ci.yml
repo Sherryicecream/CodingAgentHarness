@@ -24,7 +24,7 @@ jobs:
       - run: npm run check:docs
 
   deploy-static-demo:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
     needs: unit-test
     runs-on: ubuntu-latest
     permissions:
