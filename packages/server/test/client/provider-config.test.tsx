@@ -16,7 +16,7 @@ it('shows clear Chinese DeepSeek guidance and password lifecycle controls', asyn
   }));
   render(<ConfigPage mode="local" />);
   expect(await screen.findByText(/请访问/)).toBeTruthy();
-  expect(screen.getByText(/首次设置主密码/)).toBeTruthy();
+  expect(screen.getByText(/设置主密码/)).toBeTruthy();
 });
 
 it('offers test connection and delete configuration actions', async () => {
