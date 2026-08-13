@@ -136,18 +136,22 @@ export function ProviderConfiguration({
   return (
     <div className="card" style={{ marginTop: 16 }}>
       <h3>Providers</h3>
+      <p>Configure additional compatible providers. API keys are stored encrypted and never displayed.</p>
       {providerList}
-      <label htmlFor="provider-id">Provider ID</label>
-      <input id="provider-id" className="input" value={id} onChange={(event) => setId(event.target.value)} autoComplete="off" />
-      <label htmlFor="provider-name">Provider name</label>
-      <input id="provider-name" className="input" value={name} onChange={(event) => setName(event.target.value)} autoComplete="off" />
-      <label htmlFor="provider-base-url">Base URL</label>
-      <input id="provider-base-url" className="input" type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} autoComplete="off" />
-      <label htmlFor="provider-model">Model</label>
-      <input id="provider-model" className="input" value={model} onChange={(event) => setModel(event.target.value)} autoComplete="off" />
-      <label htmlFor="provider-api-key">Provider API Key</label>
-      <input id="provider-api-key" className="input" type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" />
-      <button className="btn btn-primary" onClick={() => void add()}>Add provider</button>
+      <details>
+        <summary>Advanced provider settings</summary>
+        <label htmlFor="provider-id">Provider ID</label>
+        <input id="provider-id" className="input" value={id} onChange={(event) => setId(event.target.value)} autoComplete="off" />
+        <label htmlFor="provider-name">Provider name</label>
+        <input id="provider-name" className="input" value={name} onChange={(event) => setName(event.target.value)} autoComplete="off" />
+        <label htmlFor="provider-base-url">Base URL</label>
+        <input id="provider-base-url" className="input" type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} autoComplete="off" />
+        <label htmlFor="provider-model">Model</label>
+        <input id="provider-model" className="input" value={model} onChange={(event) => setModel(event.target.value)} autoComplete="off" />
+        <label htmlFor="provider-api-key">Provider API Key</label>
+        <input id="provider-api-key" className="input" type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" />
+        <button className="btn btn-primary" onClick={() => void add()}>Add provider</button>
+      </details>
     </div>
   );
 }
