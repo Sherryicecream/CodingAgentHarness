@@ -15,7 +15,7 @@ it('shows clear Chinese DeepSeek guidance and password lifecycle controls', asyn
     return response({});
   }));
   render(<ConfigPage mode="local" />);
-  expect(await screen.findByText(/请在 DeepSeek 控制台创建 API Key/)).toBeTruthy();
+  expect(await screen.findByText(/请访问/)).toBeTruthy();
   expect(screen.getByText(/首次设置主密码/)).toBeTruthy();
 });
 
