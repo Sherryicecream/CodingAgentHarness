@@ -95,6 +95,7 @@ export const createDefaultAgentRun = (
   const runner = createPublicDemoRunner({
     emit: input.emit,
     workspaceManager: options.workspaceManager,
+    artifactTracker: input.artifactTracker,
     now: options.now,
     emitComplete: false,
   });

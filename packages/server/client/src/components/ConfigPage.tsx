@@ -51,7 +51,16 @@ export function ConfigPage({ mode }: { mode: RuntimeMode }) {
     try {
       const response = await fetch('/api/agent/test-key', { method: 'POST' });
       const body = await response.json() as { valid?: boolean; error?: string };
-      setMessage(body.valid ? '连接测试成功。' : `连接测试失败：${body.error ?? '未知错误'}`);
+      const explanations: Record<string, string> = {
+        API_KEY_NOT_CONFIGURED: '尚未保存 API Key。',
+        API_KEY_INVALID: 'API Key 无效或无权访问 DeepSeek。',
+        API_BILLING_REQUIRED: '账户余额或计费状态不可用。',
+        API_RATE_LIMITED: '请求过于频繁，请稍后重试。',
+        API_SERVICE_UNAVAILABLE: 'DeepSeek 服务暂时不可用。',
+        API_CONNECTION_FAILED: '无法连接 DeepSeek；请检查网络、代理、DNS 或 TLS。',
+        API_REQUEST_REJECTED: 'DeepSeek 拒绝了认证检查。',
+      };
+      setMessage(body.valid ? '连接测试成功。' : `连接测试失败：${explanations[body.error ?? ''] ?? '未知错误'}`);
     } catch {
       setMessage('连接测试失败：无法连接本地服务。');
     } finally {

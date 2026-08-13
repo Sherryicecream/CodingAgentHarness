@@ -18,6 +18,7 @@ import type {
 import type { PublicSession } from '../session/session-registry.js';
 import type { WorkspaceManager } from '../session/workspace-manager.js';
 import type { SSEEvent } from '../sse/sse-manager.js';
+import type { ArtifactTracker } from '../session/artifact-tracker.js';
 import { createPublicDemoToolRegistry } from './public-demo-dispatcher.js';
 import {
   createPublicDemoAdapter,
@@ -44,6 +45,7 @@ export interface PublicDemoRunnerOptions {
   readonly now?: () => Date;
   readonly emitComplete?: boolean;
   readonly dangerousExecutor?: DangerousDemoExecutor;
+  readonly artifactTracker?: ArtifactTracker;
 }
 
 const DEMO_CONFIG: AgentConfig = Object.freeze({
@@ -167,6 +169,15 @@ export const createPublicDemoRunner = (
         throw new Error('DEMO_GOVERNANCE_FAILED');
       } else {
         result = await tools.execute(toolCall.name, toolCall.arguments);
+        if (result.success && toolCall.name === 'write_file'
+          && typeof toolCall.arguments.path === 'string'
+          && typeof toolCall.arguments.content === 'string') {
+          options.artifactTracker?.record({
+            relativePath: toolCall.arguments.path,
+            content: Buffer.from(toolCall.arguments.content),
+            toolCallId: toolCall.id,
+          });
+        }
       }
       throwIfAborted(signal);
       emitToolResult(

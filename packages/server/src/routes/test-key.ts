@@ -20,25 +20,30 @@ export const handleTestKey = async (
   let response: globalThis.Response;
   try {
     response = await (dependencies.fetchImpl ?? fetch)(
-    `${process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'}/v1/chat/completions`,
+    `${process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'}/models`,
     {
-      method: 'POST',
+      method: 'GET',
       headers: {
-        'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [{ role: 'user', content: 'Hello' }],
-        max_tokens: 5,
-      }),
     },
     );
   } catch {
     res.json({ valid: false, error: 'API_CONNECTION_FAILED' });
     return;
   }
-  res.json(response.ok
-    ? { valid: true }
-    : { valid: false, error: `API returned ${response.status}` });
+  if (response.ok) {
+    res.json({ valid: true });
+    return;
+  }
+  const error = response.status === 401 || response.status === 403
+    ? 'API_KEY_INVALID'
+    : response.status === 402
+      ? 'API_BILLING_REQUIRED'
+      : response.status === 429
+        ? 'API_RATE_LIMITED'
+        : response.status >= 500
+          ? 'API_SERVICE_UNAVAILABLE'
+          : 'API_REQUEST_REJECTED';
+  res.json({ valid: false, error });
 };

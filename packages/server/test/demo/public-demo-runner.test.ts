@@ -9,6 +9,7 @@ import type { PublicSession } from '../../src/session/session-registry.js';
 import { createWorkspaceManager } from '../../src/session/workspace-manager.js';
 import type { WorkspaceManager } from '../../src/session/workspace-manager.js';
 import type { SSEEvent } from '../../src/sse/sse-manager.js';
+import { createArtifactTracker } from '../../src/session/artifact-tracker.js';
 
 const temporaryRoots: string[] = [];
 
@@ -86,16 +87,18 @@ afterEach(async () => {
 });
 
 describe('public demo runner', () => {
-  it('demonstrates governance and feedback in order and leaves the corrected file', async () => {
+    it('demonstrates governance and feedback in order and leaves the corrected file', async () => {
     const { session, workspaceManager } = await createDemoSession('ordered-demo');
     const events: Array<Pick<SSEEvent, 'type' | 'data'>> = [];
     const dangerousExecutor = vi.fn(async () => ({
       success: true,
       output: 'must never execute',
     }));
-    const runner = createPublicDemoRunner({
-      emit: (type, data) => { events.push({ type, data }); },
-      workspaceManager,
+      const artifactTracker = createArtifactTracker();
+      const runner = createPublicDemoRunner({
+        emit: (type, data) => { events.push({ type, data }); },
+        workspaceManager,
+        artifactTracker,
       now: () => new Date('2026-08-08T00:00:00.000Z'),
       dangerousExecutor,
     });
@@ -134,8 +137,11 @@ describe('public demo runner', () => {
     expect(result).toEqual({ status: 'completed', sessionId: 'ordered-demo' });
     expect(dangerousExecutor).not.toHaveBeenCalled();
     expect(events.some((event) => event.type === 'guardrail')).toBe(false);
-    await expect(readFile(join(session.workspace, 'demo.ts'), 'utf8'))
-      .resolves.toBe("export const greeting = 'hello, harness';\n");
+      await expect(readFile(join(session.workspace, 'demo.ts'), 'utf8'))
+        .resolves.toBe("export const greeting = 'hello, harness';\n");
+      expect(artifactTracker.list()).toEqual([
+        expect.objectContaining({ relativePath: 'demo.ts', operation: 'created', toolCallId: 'demo-corrected-write' }),
+      ]);
   });
 
   it('rejects a forged session workspace that does not match the manager-issued path', async () => {
