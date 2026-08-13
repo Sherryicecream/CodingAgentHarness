@@ -4,8 +4,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
-const isWindows = os.platform() === 'win32';
-
 /**
  * Retry fs.rmSync a few times to handle EPERM on Windows (child process
  * may still be holding the temp directory open).
@@ -75,23 +73,14 @@ describe('execute_shell tool', () => {
 
     const parsed = JSON.parse(result.output);
 
-    if (isWindows) {
-      // On Windows, exec timeout via taskkill may not always kill the child
-      // process reliably. The command may complete with exitCode 0. We still
-      // verify the result structure is correct.
-      if (result.success) {
-        expect(parsed.exitCode).toBe(0);
-      } else {
-        // On timeout, exitCode is null (signal); otherwise it is non-zero
-        expect(parsed.exitCode === null || parsed.exitCode !== 0).toBe(true);
-        expect(result.error).toBeDefined();
-      }
-    } else {
-      // On Unix, the timeout should reliably kill the process
-      expect(result.success).toBe(false);
-      expect(parsed.exitCode).toBeNull();
-      expect(result.error).toBeDefined();
-    }
+    expect(result.success).toBe(false);
+    expect(parsed.exitCode === null || parsed.exitCode !== 0).toBe(true);
+    expect(result.error).toBeDefined();
+
+    // execute() must not resolve while a timed-out descendant still holds cwd.
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+    expect(fs.existsSync(workspaceRoot)).toBe(false);
+    workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-shell-test-'));
   });
 
   it('should have risk level "moderate"', () => {

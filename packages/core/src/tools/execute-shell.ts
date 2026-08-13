@@ -1,5 +1,14 @@
 import { Tool, ToolResult } from '../types.js';
-import { exec } from 'node:child_process';
+import { exec, spawn } from 'node:child_process';
+
+const terminateWindowsProcessTree = (pid: number): Promise<void> => new Promise((resolve, reject) => {
+  const taskkill = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
+    windowsHide: true,
+    stdio: 'ignore',
+  });
+  taskkill.once('error', reject);
+  taskkill.once('close', () => resolve());
+});
 
 export function createExecuteShellTool(
   workspaceRoot: string,
@@ -28,14 +37,20 @@ export function createExecuteShellTool(
       const timeout = options?.timeout ?? 30000; // 30s default
 
       return new Promise<ToolResult>((resolve) => {
+        let timeoutHandle: NodeJS.Timeout | undefined;
+        let timedOut = false;
+        let termination = Promise.resolve();
         const child = exec(
           command,
           {
             cwd: workspaceRoot,
-            timeout,
+            ...(process.platform === 'win32' ? {} : { timeout }),
             maxBuffer: 1024 * 1024, // 1MB
           },
           (error, stdout, stderr) => {
+            if (timeoutHandle) {
+              clearTimeout(timeoutHandle);
+            }
             // exitCode: 0 on success, the actual code on non-zero exit, and
             // null when the process was killed by a signal (timeout).
             const exitCode = error === null ? 0 : (error.code ?? null);
@@ -44,13 +59,31 @@ export function createExecuteShellTool(
               stderr: stderr.trim(),
               exitCode,
             });
-            resolve({
-              success: !error || error.code === 0,
-              output,
-              error: error && error.code !== 0 ? error.message : undefined,
-            });
+            void termination.then(
+              () => resolve({
+                success: !timedOut && (!error || error.code === 0),
+                output,
+                error: timedOut
+                  ? `Command timed out after ${timeout}ms`
+                  : error && error.code !== 0 ? error.message : undefined,
+              }),
+              (terminationError: unknown) => resolve({
+                success: false,
+                output,
+                error: `Command timed out and process cleanup failed: ${String(terminationError)}`,
+              }),
+            );
           },
         );
+
+        if (process.platform === 'win32') {
+          timeoutHandle = setTimeout(() => {
+            timedOut = true;
+            termination = child.pid === undefined
+              ? Promise.reject(new Error('Shell process did not expose a PID'))
+              : terminateWindowsProcessTree(child.pid);
+          }, timeout);
+        }
       });
     },
   };
