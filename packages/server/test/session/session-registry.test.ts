@@ -114,6 +114,21 @@ describe('createSessionRegistry', () => {
     },
   );
 
+  it('preserves a completed workspace when explicitly requested', async () => {
+    const root = await createRoot();
+    const registry = createSessionRegistry({
+      workspaceManager: createWorkspaceManager({ root }),
+      idGenerator: () => 'saved-session',
+    });
+    const session = await registry.issue('client-a');
+    registry.start(session.id, 'client-a');
+    registry.complete(session.id, 'client-a');
+
+    expect(registry.preserve(session.id, 'client-a').retention).toBe('preserve');
+    expect(await registry.sweepExpired()).toBe(0);
+    expect(await realpath(session.workspace)).toBe(session.workspace);
+  });
+
   it('does not remove an active workspace before its expiry boundary', async () => {
     const root = await createRoot();
     const registry = createSessionRegistry({

@@ -111,6 +111,23 @@ afterEach(async () => {
 });
 
 describe('createWorkspaceManager', () => {
+  it('saves an issued file into a project outputs directory and rejects unsafe roots', async () => {
+    const root = await createTemporaryDirectory('harness-save-root-');
+    const projectRoot = await createTemporaryDirectory('harness-save-project-');
+    const manager = createWorkspaceManager({ root });
+    await manager.create('save-session');
+    await manager.writeIssuedFile('save-session', 'report.txt', 'hello');
+
+    await manager.saveIssuedFile('save-session', 'report.txt', projectRoot);
+    await expect(readFile(join(projectRoot, '.harness', 'outputs', 'report.txt'), 'utf8'))
+      .resolves.toBe('hello');
+
+    await expect(manager.saveIssuedFile('save-session', '../report.txt', projectRoot))
+      .rejects.toThrow();
+    await expect(manager.saveIssuedFile('save-session', 'report.txt', 'relative'))
+      .rejects.toThrow(/absolute/i);
+  });
+
   it('returns only canonical paths issued under its server-owned session key', async () => {
     const root = await createTemporaryDirectory('harness-workspaces-');
     const manager = createWorkspaceManager({ root });

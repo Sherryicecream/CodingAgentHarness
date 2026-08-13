@@ -5,7 +5,7 @@ export const DEFAULT_SESSION_TTL_MS = 60 * 60 * 1_000;
 export const DEFAULT_MAX_CONCURRENT_SESSIONS = 2;
 
 export type SessionStatus = 'issued' | 'running' | 'completed' | 'failed' | 'expired';
-export type WorkspaceRetention = 'temporary';
+export type WorkspaceRetention = 'temporary' | 'preserve';
 
 export interface PublicSession {
   readonly id: string;
@@ -24,6 +24,7 @@ interface SessionRecord {
   readonly status: SessionStatus;
   readonly createdAt: number;
   readonly expiresAt: number;
+  readonly retention: WorkspaceRetention;
 }
 
 export interface SessionRegistryOptions {
@@ -45,6 +46,7 @@ export interface SessionRegistry {
   start(id: string, clientKey: string): PublicSession;
   complete(id: string, clientKey: string): PublicSession;
   fail(id: string, clientKey: string): PublicSession;
+  preserve(id: string, clientKey: string): PublicSession;
 }
 
 export class ConcurrentSessionLimitError extends Error {
@@ -79,7 +81,7 @@ const toPublicSession = (record: SessionRecord): PublicSession => Object.freeze(
   id: record.id,
   clientKey: record.clientKey,
   workspace: record.workspace,
-  retention: 'temporary',
+  retention: record.retention,
   status: record.status,
   createdAt: new Date(record.createdAt),
   expiresAt: new Date(record.expiresAt),
@@ -163,6 +165,7 @@ export const createSessionRegistry = (
           status: 'issued',
           createdAt,
           expiresAt: createdAt + ttlMs,
+          retention: 'temporary',
         };
         records.set(id, record);
         return toPublicSession(record);
@@ -192,7 +195,7 @@ export const createSessionRegistry = (
       let removed = 0;
       const failures: unknown[] = [];
       for (const [id, record] of records) {
-        if (!isWorkspaceReclaimable(record, timestamp) || sweepOptions.skipIds?.has(id)) {
+        if (record.retention === 'preserve' || !isWorkspaceReclaimable(record, timestamp) || sweepOptions.skipIds?.has(id)) {
           continue;
         }
         try {
@@ -233,6 +236,13 @@ export const createSessionRegistry = (
 
     fail(id, clientKey) {
       return transitionRunningSession(id, clientKey, 'failed');
+    },
+
+    preserve(id, clientKey) {
+      const record = ownedRecord(id, clientKey);
+      const updated = { ...record, retention: 'preserve' as const };
+      records.set(id, updated);
+      return toPublicSession(updated);
     },
   };
 };

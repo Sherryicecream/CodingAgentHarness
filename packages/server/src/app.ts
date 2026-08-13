@@ -199,8 +199,9 @@ export const createApp = (options: AppOptions = {}): HarnessApp => {
     sessionStore,
     abortTimeoutMs: options.abortTimeoutMs,
     historySaveTimeoutMs: options.historySaveTimeoutMs,
-    workspaceRoot,
-  });
+      workspaceRoot,
+      workspaceManager,
+    });
   let closed = false;
   let sweepInFlight: Promise<void> | null = null;
   let closePromise: Promise<void> | null = null;

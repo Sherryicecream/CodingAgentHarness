@@ -27,6 +27,7 @@ import {
   type SessionRegistry,
 } from '../session/session-registry.js';
 import type { SSEEvent, SSEManager } from '../sse/sse-manager.js';
+import type { WorkspaceManager } from '../session/workspace-manager.js';
 
 const DEFAULT_RUN_RATE_WINDOW_MS = 60 * 60 * 1_000;
 const DEFAULT_RUN_RATE_LIMIT = 20;
@@ -53,6 +54,7 @@ export interface AgentRouterDependencies {
   readonly abortTimeoutMs?: number;
   readonly historySaveTimeoutMs?: number;
   readonly workspaceRoot?: string;
+  readonly workspaceManager?: WorkspaceManager;
 }
 
 export interface ActiveExpiryResult {
@@ -526,6 +528,30 @@ export const createAgentRouter = (
     observeCompletion(active, active.handle.completion);
 
     res.status(202).json({ sessionId: session.id, status: 'started' });
+  });
+
+  router.post('/sessions/:sessionId/save', async (req: Request, res: Response) => {
+    if (dependencies.policy.mode !== 'local' || !dependencies.workspaceManager || !dependencies.workspaceRoot) {
+      res.status(403).json({ error: 'PERSISTENCE_DISABLED' });
+      return;
+    }
+    const sessionId = req.params.sessionId;
+    const fileName = isPlainObject(req.body) ? req.body.fileName : undefined;
+    if (typeof fileName !== 'string' || fileName.length === 0 || !dependencies.sessionRegistry.getAuthorized(sessionId, normalizeClientKey(req))) {
+      res.status(404).json({ error: 'SESSION_NOT_FOUND' });
+      return;
+    }
+    try {
+      const destination = await dependencies.workspaceManager.saveIssuedFile(
+        sessionId,
+        fileName,
+        dependencies.workspaceRoot,
+      );
+      const session = dependencies.sessionRegistry.preserve(sessionId, normalizeClientKey(req));
+      res.status(201).json({ sessionId, retention: session.retention, path: destination });
+    } catch {
+      res.status(400).json({ error: 'FILE_SAVE_FAILED' });
+    }
   });
 
   router.get('/stream/:sessionId', (req: Request, res: Response) => {
