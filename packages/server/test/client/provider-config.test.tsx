@@ -1,163 +1,47 @@
 // @vitest-environment jsdom
-
 import React from 'react';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ConfigPage } from '../../client/src/components/ConfigPage.js';
-import { ProviderConfiguration } from '../../client/src/components/ProviderConfiguration.js';
 
-const jsonResponse = (body: unknown, status = 200): Response => new Response(
-  JSON.stringify(body),
-  { status, headers: { 'Content-Type': 'application/json' } },
-);
+const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
-afterEach(() => {
-  cleanup();
-  vi.unstubAllGlobals();
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+it('shows Chinese DeepSeek setup guidance and password lifecycle controls', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input) === '/api/config/status') return response({ hasKey: false, source: 'file', state: 'empty' });
+    if (String(input) === '/api/config/guide') return response({ needsSetup: true, message: '', instructions: ['请访问 https://platform.deepseek.com/api-keys 创建 API Key。', '部署时优先使用 DEEPSEEK_API_KEY 环境变量。'] });
+    return response({});
+  }));
+  render(<ConfigPage mode="local" />);
+  expect(await screen.findByText(/请访问 https:\/\/platform\.deepseek\.com\/api-keys/)).toBeTruthy();
+  expect(screen.getByText(/首次保存需要设置主密码/)).toBeTruthy();
 });
 
-it.each([
-  ['an HTTP error', () => Promise.resolve(jsonResponse({ error: 'SERVICE_UNAVAILABLE' }, 503))],
-  ['a network error', () => Promise.reject(new TypeError('Failed to fetch'))],
-])('shows a provider loading error instead of an empty list after %s', async (_name, failedFetch) => {
-  vi.stubGlobal('fetch', vi.fn(failedFetch));
-
-  render(
-    <ProviderConfiguration
-      needsMasterPassword={false}
-      masterPassword=""
-      onMasterPasswordChange={vi.fn()}
-      onCredentialChange={vi.fn(async () => undefined)}
-      onMessage={vi.fn()}
-    />,
-  );
-
-  const alert = await screen.findByRole('alert');
-  expect(alert.textContent).toContain('无法加载服务商');
-  expect(screen.queryByText('还没有添加其他服务商')).toBeNull();
-});
-
-it('adds, lists, and deletes a provider without retaining its key in the form', async () => {
-  const providers: Array<Record<string, unknown>> = [];
-  const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    if (url === '/api/config/status') {
-      return jsonResponse({ hasKey: true, source: 'file', state: 'unlocked' });
-    }
-    if (url === '/api/config/guide') {
-      return jsonResponse({ needsSetup: false, message: '', instructions: [] });
-    }
-    if (url === '/api/config/providers' && init?.method === 'POST') {
-      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
-      const provider = { ...body, apiKey: undefined, hasApiKey: true };
-      providers.push(provider);
-      return jsonResponse({ provider }, 201);
-    }
-    if (url === '/api/config/providers') {
-      return jsonResponse({ providers });
-    }
-    if (url === '/api/config/providers/fake-compatible' && init?.method === 'DELETE') {
-      providers.splice(0);
-      return jsonResponse({ status: 'ok' });
-    }
-    return jsonResponse({}, 404);
+it('offers test connection and delete configuration actions', async () => {
+  const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input) === '/api/config/status') return response({ hasKey: true, source: 'file', state: 'unlocked' });
+    if (String(input) === '/api/config/guide') return response({ needsSetup: false, message: '', instructions: [] });
+    if (String(input) === '/api/agent/test-key') return response({ valid: true });
+    return response({ status: 'ok' });
   });
   vi.stubGlobal('fetch', fetchSpy);
   render(<ConfigPage mode="local" />);
-
-  await screen.findByText('API Key 状态');
-  await userEvent.type(screen.getByLabelText('唯一 ID'), 'fake-compatible');
-  await userEvent.type(screen.getByLabelText('名称'), 'Fake Compatible Provider');
-  await userEvent.type(screen.getByLabelText('接口地址'), 'https://provider.invalid/v1');
-  await userEvent.type(screen.getByLabelText('模型名称'), 'fake-model-v1');
-  await userEvent.type(screen.getByLabelText('API Key（不会回显）'), 'fake-provider-key-sentinel');
-  await userEvent.click(screen.getByRole('button', { name: '添加服务商' }));
-
-  await screen.findByText('Fake Compatible Provider');
-  expect((screen.getByLabelText('API Key（不会回显）') as HTMLInputElement).value).toBe('');
-  const createCall = fetchSpy.mock.calls.find(([url, init]) => (
-    String(url) === '/api/config/providers' && init?.method === 'POST'
-  ));
-  expect(JSON.parse(String(createCall?.[1]?.body))).toEqual({
-    id: 'fake-compatible',
-    name: 'Fake Compatible Provider',
-    baseUrl: 'https://provider.invalid/v1',
-    model: 'fake-model-v1',
-    apiKey: 'fake-provider-key-sentinel',
-  });
-
-  await userEvent.click(screen.getByRole('button', { name: '删除 Fake Compatible Provider' }));
-  await waitFor(() => expect(screen.queryByText('Fake Compatible Provider')).toBeNull());
+  expect(await screen.findByRole('button', { name: '测试连接' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: '删除配置' })).toBeTruthy();
+  await userEvent.click(screen.getByRole('button', { name: '测试连接' }));
+  expect(fetchSpy).toHaveBeenCalledWith('/api/agent/test-key', expect.objectContaining({ method: 'POST' }));
 });
 
-it('loads stored providers after unlocking a locked credential store', async () => {
-  let unlocked = false;
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    if (url === '/api/config/status') {
-      return jsonResponse({ hasKey: true, source: 'file', state: unlocked ? 'unlocked' : 'locked' });
-    }
-    if (url === '/api/config/guide') {
-      return jsonResponse({ needsSetup: false, message: '', instructions: [] });
-    }
-    if (url === '/api/config/unlock' && init?.method === 'POST') {
-      unlocked = true;
-      return jsonResponse({ status: 'unlocked' });
-    }
-    if (url === '/api/config/providers' && unlocked) {
-      return jsonResponse({ providers: [{
-        id: 'fake-compatible',
-        name: 'Stored Fake Provider',
-        baseUrl: 'https://provider.invalid/v1',
-        model: 'fake-model-v1',
-        hasApiKey: true,
-      }] });
-    }
-    return jsonResponse({ error: 'CREDENTIAL_STORE_LOCKED' }, 423);
+it('does not expose provider add controls', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input) === '/api/config/status') return response({ hasKey: true, source: 'file', state: 'unlocked' });
+    if (String(input) === '/api/config/guide') return response({ needsSetup: false, message: '', instructions: [] });
+    return response({});
   }));
   render(<ConfigPage mode="local" />);
-
-  await screen.findByLabelText('主密码');
-  await userEvent.type(screen.getByLabelText('主密码'), 'correct horse battery staple');
-  await userEvent.click(screen.getByRole('button', { name: '解锁凭据' }));
-
-  await screen.findByText('Stored Fake Provider');
-});
-
-it('keeps advanced provider fields collapsed until the user opens them', async () => {
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-    const url = String(input);
-    if (url === '/api/config/providers') return jsonResponse({ providers: [] });
-    return jsonResponse({});
-  }));
-
-  render(<ProviderConfiguration
-    needsMasterPassword={false}
-    masterPassword=""
-    onMasterPasswordChange={vi.fn()}
-    onCredentialChange={vi.fn(async () => undefined)}
-    onMessage={vi.fn()}
-  />);
-
-  await screen.findByText('还没有添加其他服务商');
-  expect(screen.getByText('可添加兼容服务商。API Key 只加密保存，不会回显。')).toBeTruthy();
-  expect(screen.getByText('添加服务商（高级）')).toBeTruthy();
-  expect(screen.getByLabelText('唯一 ID').closest('details')?.hasAttribute('open')).toBe(false);
-  await userEvent.click(screen.getByText('添加服务商（高级）'));
-  expect(screen.getByLabelText('唯一 ID').closest('details')?.hasAttribute('open')).toBe(true);
-});
-
-it('does not render provider details while the credential store is locked', async () => {
-  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-    const url = String(input);
-    if (url === '/api/config/status') return jsonResponse({ hasKey: true, source: 'file', state: 'locked' });
-    if (url === '/api/config/guide') return jsonResponse({ needsSetup: false, message: '', instructions: [] });
-    return jsonResponse({});
-  }));
-
-  render(<ConfigPage mode="local" />);
-  await screen.findByLabelText('主密码');
-  expect(screen.queryByText('Provider 配置')).toBeNull();
-  expect(screen.queryByLabelText('API Key（不会回显）')).toBeNull();
+  await screen.findByText('DeepSeek 配置');
+  expect(screen.queryByRole('button', { name: /添加服务商|添加 Provider/i })).toBeNull();
 });
