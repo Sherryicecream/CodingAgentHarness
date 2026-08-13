@@ -98,9 +98,7 @@ const assertPositiveInteger = (value: number, name: string): void => {
 };
 
 const isWorkspaceReclaimable = (record: SessionRecord, timestamp: number): boolean => (
-  record.status === 'completed'
-  || record.status === 'failed'
-  || timestamp >= record.expiresAt
+  timestamp >= record.expiresAt
 );
 
 export const createSessionRegistry = (

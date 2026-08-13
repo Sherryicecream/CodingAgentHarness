@@ -94,7 +94,7 @@ describe('createSessionRegistry', () => {
   });
 
   it.each(['completed', 'failed'] as const)(
-    'removes a %s temporary workspace on the next retention sweep',
+    'keeps a %s temporary workspace available for export until session expiry',
     async (terminalStatus) => {
       const root = await createRoot();
       const registry = createSessionRegistry({
@@ -109,8 +109,8 @@ describe('createSessionRegistry', () => {
         registry.fail(session.id, 'client-a');
       }
 
-      expect(await registry.sweepExpired()).toBe(1);
-      await expect(realpath(session.workspace)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await registry.sweepExpired()).toBe(0);
+      expect(await realpath(session.workspace)).toBe(session.workspace);
     },
   );
 
